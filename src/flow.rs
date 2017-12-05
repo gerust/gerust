@@ -311,7 +311,7 @@ impl<R, B> State<R> for B4 where R: Resource<Request=http::Request<B>, Response=
 
         // TODO: Properly handle Content-Length not being given
         if resource.valid_entity_length(content_length.unwrap().to_str().unwrap().parse().unwrap()) {
-            Ok(States::B4)
+            Ok(States::B3)
         } else {
             Err(Outcomes::Halt(http::StatusCode::PAYLOAD_TOO_LARGE))
         }
