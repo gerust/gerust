@@ -1,4 +1,6 @@
 use http;
+use futures::Stream;
+use futures::Sink;
 
 use resource::Resource;
 
@@ -84,16 +86,22 @@ trait State<R> where R: Resource {
 }
 
 #[derive(Debug)]
-pub struct Flow<R> where R: Resource + Debug {
+pub struct Flow<R, B, BD> 
+    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>> + Debug,
+          B: AsRef<[u8]> + Debug + 'static,
+          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,
+{
     resource: R,
     state: States
 }
 
-impl<R, B> Flow<R>
-    where R: Resource<Request=http::Request<B>, Response=http::Response<B>>,
-          R: Debug
+impl<R, B, BD> Flow<R, B, BD>
+    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>>,
+          R: Debug,
+          B: From<String> + Debug + AsRef<[u8]> + 'static,
+          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,
 {
-    pub fn new(resource: R) -> Flow<R> {
+    pub fn new(resource: R) -> Flow<R, B, BD> {
         Flow { resource, state: States::default() }
     }
 
@@ -176,6 +184,7 @@ impl<R, B> State<R> for B12 where R: Resource<Request=http::Request<B>, Response
     const LABEL: States = States::B12;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
+
         if resource.known_methods().contains(resource.request().method()) {
             Ok(States::B11)
         } else {
@@ -305,6 +314,10 @@ impl<R, B> State<R> for B5 where R: Resource<Request=http::Request<B>, Response=
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
         let content_type = resource.request().headers().get("Content-Type");
+
+        println!("headers: {:?}", resource.request().headers());
+
+        println!("content-type: {:?}", content_type);
 
         // TODO: Properly handle Content-Type not being given
         if resource.known_content_type(content_type.unwrap()) {
@@ -630,13 +643,18 @@ impl<R, B> State<R> for O16 where R: Resource<Request=http::Request<B>, Response
 
 struct O18;
 
-impl<R, B> State<R> for O18 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B, BD> State<R> for O18 
+    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>>,
+          R: Debug,
+          B: From<String>,
+          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,          
+{
     const LABEL: States = States::O18;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
         // TODO MULTIPLE CHOICES MISSING
-
-        panic!("congrats, you reached the end!");
+        resource.response_mut().body_mut().send(B::from("hello!".to_string()));
+        
         Err(Outcomes::Halt(http::StatusCode::OK))
     }
 }

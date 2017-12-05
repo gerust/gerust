@@ -55,9 +55,10 @@ fn main() {
     let addr = ([127, 0, 0, 1], 3000).into();
 
     let new_service = const_service(service_fn(|request| {
-        let response = http::Response::default();
+        let (sender, body) = hyper::Body::pair();
+        let http_response = http::Response::builder().body(sender);
 
-        let resource = DefaultResource { request: request, response: response };
+        let resource = DefaultResource { request: request, response: sink };
         let mut flow = Flow::new(resource);
         flow.execute();
         let DefaultResource { request, response } = flow.finish();
