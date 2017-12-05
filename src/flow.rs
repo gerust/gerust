@@ -121,6 +121,20 @@ impl<R, B> Flow<R>
             States::C3 => { C3::execute(resource) },
             States::C4 => { C4::execute(resource) },
             States::D4 => { D4::execute(resource) },
+            States::D5 => { D5::execute(resource) },
+            States::E5 => { E5::execute(resource) },
+            States::E6 => { E6::execute(resource) },
+            States::F6 => { F6::execute(resource) },
+            States::F7 => { F7::execute(resource) },
+            States::G7 => { G7::execute(resource) },
+            States::G8 => { G8::execute(resource) },
+            States::G9 => { G9::execute(resource) },
+            States::G11 => { G11::execute(resource) },
+            States::H10 => { H10::execute(resource) },
+            States::M16 => { M16::execute(resource) },
+            States::N16 => { N16::execute(resource) },
+            States::O16 => { O16::execute(resource) },
+            States::O18 => { O18::execute(resource) },
             _ => { unimplemented!() },
         }?;
 
@@ -342,7 +356,7 @@ impl<R, B> State<R> for C3 where R: Resource<Request=http::Request<B>, Response=
     const LABEL: States = States::C3;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
-        let accept = resource.request().headers().get("Accept");
+        let accept = resource.request().headers().get(http::header::ACCEPT);
 
         if let Some(header) = accept {
             Ok(States::C4)
@@ -358,7 +372,7 @@ impl<R, B> State<R> for C4 where R: Resource<Request=http::Request<B>, Response=
     const LABEL: States = States::C4;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
-        let accept = resource.request().headers().get("Accept");
+        let accept = resource.request().headers().get(http::header::ACCEPT);
 
         if let Some(header) = accept {
             // TODO actually choose the type
@@ -381,9 +395,253 @@ impl<R, B> State<R> for D4 where R: Resource<Request=http::Request<B>, Response=
     const LABEL: States = States::D4;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
-        unimplemented!("congratulations, you reached D4");
+        let accept_language = resource.request().headers().get(http::header::ACCEPT_LANGUAGE);
+
+        if let Some(header) = accept_language {
+            Ok(States::D5)
+        } else {
+            Ok(States::E5)
+        }
     }
 }
+
+struct D5;
+
+impl<R, B> State<R> for D5 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::D5;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let accept_language = resource.request().headers().get(http::header::ACCEPT_LANGUAGE);
+
+        if let Some(header) = accept_language {
+            // TODO: this algorithm is too simple
+            if resource.languages_provided().contains(&header.to_str().unwrap()) {
+                Ok(States::E5)
+            } else {
+                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+            }
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+struct E5;
+
+impl<R, B> State<R> for E5 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::D5;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let accept_charset = resource.request().headers().get(http::header::ACCEPT_CHARSET);
+
+        if let Some(header) = accept_charset {
+            Ok(States::E6)
+        } else {
+            Ok(States::F6)
+        }
+    }
+}
+
+struct E6;
+
+impl<R, B> State<R> for E6 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::E6;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let accept_charset = resource.request().headers().get(http::header::ACCEPT_CHARSET);
+
+        if let Some(header) = accept_charset {
+            // TODO: this algorithm is too simple
+            if resource.charsets_provided().contains(&header) {
+                Ok(States::G7)
+            } else {
+                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+            }
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+struct F6;
+
+impl<R, B> State<R> for F6 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::F6;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let accept_charset = resource.request().headers().get(http::header::ACCEPT_CHARSET);
+
+        if let Some(header) = accept_charset {
+            Ok(States::F7)
+        } else {
+            Ok(States::G7)
+        }
+    }
+}
+
+struct F7;
+
+impl<R, B> State<R> for F7 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::F7;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let accept_encoding = resource.request().headers().get(http::header::ACCEPT_ENCODING);
+
+        if let Some(header) = accept_encoding {
+            // TODO: this algorithm is too simple
+            if true {
+                Ok(States::G7)
+            } else {
+                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+            }
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+struct G7;
+
+impl<R, B> State<R> for G7 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::G7;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        if resource.resource_exists() {
+            Ok(States::G8)
+        } else {
+            Ok(States::H7)
+        }
+    }
+}
+
+struct G8;
+
+impl<R, B> State<R> for G8 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::G8;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let if_match = resource.request().headers().get(http::header::IF_MATCH);
+
+        if let Some(header) = if_match {
+            Ok(States::G9)
+        } else {
+            Ok(States::H10)
+        }
+    }
+}
+
+struct G9;
+
+impl<R, B> State<R> for G9 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::G9;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let if_match = resource.request().headers().get(http::header::IF_MATCH);
+
+        if let Some(header) = if_match {
+            if header.to_str().unwrap() == "*" {
+                Ok(States::H10)
+            } else {
+                Ok(States::G11)
+            }
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+struct G11;
+
+impl<R, B> State<R> for G11 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::G11;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        let if_match = resource.request().headers().get(http::header::IF_MATCH);
+
+        if let Some(header) = if_match {
+            //TODO: Implement correctly
+            let etag_in_if_match = true;
+            if etag_in_if_match {
+                Ok(States::H10)
+            } else {
+                Err(Outcomes::Halt(http::StatusCode::PRECONDITION_FAILED))
+            }
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+struct H10;
+
+impl<R, B> State<R> for H10 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::H10;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        // TODO: we currently just skip through
+        Ok(States::M16)
+    }
+}
+
+// TODO: CONDITION HANDLING
+
+struct M16;
+
+impl<R, B> State<R> for M16 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::M16;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        if http::method::Method::DELETE == *resource.request().method() {
+            Ok(States::M20)
+        } else {
+            Ok(States::N16)
+        }
+    }
+}
+
+struct N16;
+
+impl<R, B> State<R> for N16 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::N16;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        if http::method::Method::POST == *resource.request().method() {
+            Ok(States::N11)
+        } else {
+            Ok(States::O16)
+        }
+    }
+}
+
+
+struct O16;
+
+impl<R, B> State<R> for O16 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::O16;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        if http::method::Method::PUT == *resource.request().method() {
+            Ok(States::O14)
+        } else {
+            Ok(States::O18)
+        }
+    }
+}
+
+struct O18;
+
+impl<R, B> State<R> for O18 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+    const LABEL: States = States::O18;
+
+    fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        // TODO MULTIPLE CHOICES MISSING
+
+        panic!("congrats, you reached the end!");
+        Err(Outcomes::Halt(http::StatusCode::OK))
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {
