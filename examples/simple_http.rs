@@ -57,7 +57,6 @@ fn main() {
     let server = Server::new(|request, mut response| {
         let body = response.body("test".as_bytes()).unwrap();
 
-        let request = http::Request::default();
         let resource = DefaultResource { request: request, response: body };
         let mut flow = Flow::new(resource);
         flow.execute();
