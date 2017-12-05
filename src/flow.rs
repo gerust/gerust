@@ -103,37 +103,39 @@ impl<R, B> Flow<R>
         resource
     }
 
-    fn transition(self) -> Result<Self, Outcomes> {
-        let Flow { mut resource, state } = self;
+    fn transition(&mut self) -> Result<(), Outcomes> {
+        let resource = &mut self.resource;
 
-        let next = match state {
-            States::B13 => { B13::execute(&mut resource) },
-            States::B12 => { B12::execute(&mut resource) },
-            States::B11 => { B11::execute(&mut resource) },
-            States::B10 => { B10::execute(&mut resource) },
-            States::B9 => { B9::execute(&mut resource) },
-            States::B8 => { B8::execute(&mut resource) },
-            States::B7 => { B7::execute(&mut resource) },
-            States::B6 => { B6::execute(&mut resource) },
-            States::B5 => { B5::execute(&mut resource) },
-            States::B4 => { B4::execute(&mut resource) },
-            States::B3 => { B3::execute(&mut resource) },
-            States::C3 => { C3::execute(&mut resource) },
-            States::C4 => { C4::execute(&mut resource) },
-            States::D4 => { D4::execute(&mut resource) },
+        let next = match self.state {
+            States::B13 => { B13::execute(resource) },
+            States::B12 => { B12::execute(resource) },
+            States::B11 => { B11::execute(resource) },
+            States::B10 => { B10::execute(resource) },
+            States::B9 => { B9::execute(resource) },
+            States::B8 => { B8::execute(resource) },
+            States::B7 => { B7::execute(resource) },
+            States::B6 => { B6::execute(resource) },
+            States::B5 => { B5::execute(resource) },
+            States::B4 => { B4::execute(resource) },
+            States::B3 => { B3::execute(resource) },
+            States::C3 => { C3::execute(resource) },
+            States::C4 => { C4::execute(resource) },
+            States::D4 => { D4::execute(resource) },
             _ => { unimplemented!() },
         }?;
 
-        Ok(Flow { resource, state: next })
+        self.state = next;
+
+        Ok(())
     }
 
-    pub fn execute(self) {
+    pub fn execute(&mut self) {
         println!("transitioning from: {:?}", self);
 
         match self.transition() {
-            Ok(flow) => {
-                println!("transitioned into: {:?}", flow);
-                flow.execute()
+            Ok(()) => {
+                println!("transitioned into: {:?}", self);
+                self.execute()
             },
             Err(e) => println!("Error or end: {:?}", e)
         }
