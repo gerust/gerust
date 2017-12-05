@@ -40,15 +40,15 @@ pub trait Resource {
         false
     }
 
-    fn known_content_type(&self, content_type: http::header::HeaderValue) -> bool {
+    fn known_content_type(&self, content_type: &http::header::HeaderValue) -> bool {
         true
     }
 
-    fn valid_content_headers(&self, content_headers: (http::header::HeaderName, http::header::HeaderValue)) -> bool {
+    fn valid_content_headers<'a, I: Iterator<Item=(&'a http::header::HeaderName, &'a http::header::HeaderValue)>>(&self, content_headers: I) -> bool {
         true
     }
 
-    fn valid_entity_length(&self, u64) -> bool {
+    fn valid_entity_length(&self, len: u64) -> bool {
         true
     }
 

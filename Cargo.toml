@@ -8,3 +8,8 @@ hyper = "0.11"
 futures = "0.1"
 http = "0.1"
 mime = "0.3"
+
+[dev-dependencies]
+simple-server = "0.3.0"
+log = "*"
+env_logger = "*"
