@@ -21,22 +21,9 @@ use futures::sync::oneshot;
 use futures::Future;
 
 #[derive(Debug)]
-struct DefaultResource<B> where B: Default {
-    request: http::Request<B>,
-//    response: Option<http::Response<B>>
-}
+struct DefaultResource;
 
-impl<B> Resource for DefaultResource<B> where B: Default {
-    type Request = http::Request<B>;
-    type Response = http::Response<B>;
-
-    fn request(&self) -> &Self::Request {
-        &self.request
-    }
-
-    fn request_mut(&mut self) -> &mut Self::Request {
-        &mut self.request
-    }
+impl Resource for DefaultResource {
 //
 //    fn response(&self) -> &Self::Response {
 //        &self.response
@@ -47,11 +34,11 @@ impl<B> Resource for DefaultResource<B> where B: Default {
 //    }
 
     fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&Self) -> ())] {
-        &[(mime::TEXT_HTML, default_html::<B>)]
+        &[(mime::TEXT_HTML, default_html)]
     }
 }
 
-fn default_html<B: Default>(resource: &DefaultResource<B>) -> () {
+fn default_html(resource: &DefaultResource) -> () {
 
 }
 
@@ -73,10 +60,10 @@ impl<'a> hyper::server::Service for GerustService<'a>
         let (sx, rx): (futures::sync::oneshot::Sender<Self::Response>, _) = oneshot::channel::<Self::Response>();
 
         let f = futures::future::lazy(move || {
-            let resource = DefaultResource { request: req };
+            let resource = DefaultResource;
             let mut flow = HttpFlow::new();
 
-            flow.execute(resource, sx);
+            flow.execute(resource, req, sx);
             futures::future::ok::<(), ()>(())
         });
 

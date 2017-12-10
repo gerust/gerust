@@ -3,15 +3,6 @@ use http;
 use mime;
 
 pub trait Resource {
-    type Request;
-    type Response;
-
-    fn request(&self) -> &Self::Request;
-    fn request_mut(&mut self) -> &mut Self::Request;
-//
-//    fn response(&self) -> &Self::Response;
-//    fn response_mut(&mut self) -> &mut Self::Response;
-
     fn resource_exists(&self) -> bool {
         true
     }
