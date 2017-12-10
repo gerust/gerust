@@ -2,7 +2,7 @@ use std;
 use http;
 use mime;
 
-pub trait Resource {
+pub trait Resource where Self: 'static {
     fn resource_exists(&self) -> bool {
         true
     }
@@ -82,10 +82,10 @@ pub trait Resource {
     }
 
     ///TODO: create handler interface
-    fn content_types_allowed(&self) -> &'static [(mime::Mime, fn (&Self) -> ())];
+    fn content_types_allowed(&self) -> &'static [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())];
 
     ///TODO: create handler interface
-    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&Self) -> ())] {
+    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())] {
         &[]
     }
 

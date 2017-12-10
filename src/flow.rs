@@ -1,5 +1,6 @@
 use http;
 use hyper;
+use mime;
 use futures;
 use futures::Stream;
 use futures::Sink;
@@ -76,21 +77,20 @@ pub enum States {
     P11
 }
 
-#[derive(Debug)]
-pub enum Outcomes {
+pub enum Outcomes<R> {
     StartResponse,
+    Handle(fn (&mut R, &mut DelayedResponse) -> ()),
     Halt(http::status::StatusCode)
 }
 
 // TODO: Maybe turn into struct, holding body and builder?
-#[derive(Debug)]
-pub enum DelayedResponse<B: Debug> {
+pub enum DelayedResponse {
     Waiting(http::response::Builder),
-    Started(http::response::Response<B>)
+    Started(futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>>)
 }
 
-impl<B: Debug> DelayedResponse<B> {
-    fn new() -> DelayedResponse<B> {
+impl DelayedResponse {
+    fn new() -> DelayedResponse {
         let builder = http::response::Builder::new();
         DelayedResponse::Waiting(builder)
     }
@@ -102,7 +102,7 @@ impl<B: Debug> DelayedResponse<B> {
         }
     }
 
-    fn response(&mut self) -> &mut http::response::Response<B> {
+    fn response_body(&mut self) -> &mut futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>> {
         match *self {
             DelayedResponse::Started(ref mut r) => r,
             _ => { panic!("called response() before response has started!") }
@@ -111,12 +111,11 @@ impl<B: Debug> DelayedResponse<B> {
 }
 
 //TODO: Should be "ResourceWrapper"
-#[derive(Debug)]
 pub struct ResponseWrapper<R, B>
     where R: Resource {
     resource: R,
     request: http::Request<B>,
-    response: DelayedResponse<hyper::Body>
+    response: DelayedResponse
 }
 
 impl<R, B> ResponseWrapper<R, B>
@@ -138,7 +137,7 @@ impl Default for States {
 trait State<R, B> where R: Resource {
     const LABEL: States;
 
-    fn execute(response: &mut ResponseWrapper<R ,B>) -> Result<States, Outcomes>;
+    fn execute(response: &mut ResponseWrapper<R ,B>) -> Result<States, Outcomes<R>>;
 }
 
 pub trait Flow {
@@ -152,7 +151,7 @@ pub trait Flow {
     fn execute<R>(&mut self, resource: R, request: Self::Request, sx: Sender<Self::Response>)
         where R: Resource + Debug;
 
-    fn transition<R, B>(&mut self, response_wrapper: &mut ResponseWrapper<R, B>) -> Result<(), Outcomes>
+    fn transition<R, B>(&mut self, response_wrapper: &mut ResponseWrapper<R, B>) -> Result<(), Outcomes<R>>
         where R: Resource;
 }
 
@@ -183,17 +182,36 @@ impl Flow for HttpFlow
         let mut status = None;
 
         loop {
-            println!("transitioning from: {:?}", self);
+            //println!("transitioning from: {:?}", self);
 
             let retval = self.transition(&mut wrapper);
 
             match retval {
                 Ok(()) => {
-                    println!("transitioned into: {:?}", self);
+                    //println!("transitioned into: {:?}", self);
                     continue;
                 },
                 Err(Outcomes::StartResponse) => {
+                    //println!("received StartResponse!");
 
+                    let (sink, body) = hyper::Body::pair();
+                    // TODO: Fail properly
+                    let response = wrapper.response.builder().body(body).unwrap();
+                    wrapper.response = DelayedResponse::Started(sink);
+                    sx.send(response);
+                    //println!("response started: {:?}", self);
+                    break;
+                },
+                Err(Outcomes::Handle(handler)) => {
+                    //println!("handling!");
+                    let (sink, body) = hyper::Body::pair();
+                    // TODO: Fail properly
+                    let response = wrapper.response.builder().body(body).unwrap();
+                    wrapper.response = DelayedResponse::Started(sink);
+                    sx.send(response);
+                    //println!("response started: {:?}", self);
+                    handler(&mut wrapper.resource, &mut wrapper.response);
+                    break;
                 },
                 Err(Outcomes::Halt(s)) => {
                     status = Some(s);
@@ -204,11 +222,31 @@ impl Flow for HttpFlow
                 _ => {}
             };
         }
+//
+//        loop {
+//            println!("transitioning from: {:?}", self);
+//
+//            let retval = self.transition(&mut wrapper);
+//
+//            match retval {
+//                Ok(()) => {
+//                    println!("transitioned into: {:?}", self);
+//                    continue;
+//                },
+//                Err(Outcomes::StartResponse) => {
+//                    unreachable!();
+//                },
+//                Err(Outcomes::Halt(s)) => {
+//                    unreachable!();
+//                }
+//                _ => {}
+//            };
+//        }
 
 
     }
 
-    fn transition<R, B>(&mut self, response_wrapper: &mut ResponseWrapper<R, B>) -> Result<(), Outcomes>
+    fn transition<R, B>(&mut self, response_wrapper: &mut ResponseWrapper<R, B>) -> Result<(), Outcomes<R>>
         where R: Resource
     {
         // TODO: clean this renaming up
@@ -257,7 +295,7 @@ struct B13;
 impl<R, B> State<R, B> for B13 where R: Resource {
     const LABEL: States = States::B13;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         if wrapper.resource.service_available() {
             Ok(States::B12)
         } else {
@@ -271,7 +309,7 @@ struct B12;
 impl<R, B> State<R, B> for B12 where R: Resource {
     const LABEL: States = States::B12;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
         let request = &mut wrapper.request;
 
@@ -288,7 +326,7 @@ struct B11;
 impl<R, B> State<R, B> for B11 where R: Resource {
     const LABEL: States = States::B11;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -306,7 +344,7 @@ struct B10;
 impl<R, B> State<R, B> for B10 where R: Resource {
     const LABEL: States = States::B10;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -329,7 +367,7 @@ struct B9;
 impl<R, B> State<R, B> for B9 where R: Resource {
     const LABEL: States = States::B9;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
 
@@ -365,7 +403,7 @@ struct B8;
 impl<R, B> State<R, B> for B8 where R: Resource {
     const LABEL: States = States::B8;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -386,7 +424,7 @@ struct B7;
 impl<R, B> State<R, B> for B7 where R: Resource {
     const LABEL: States = States::B7;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
 
@@ -403,7 +441,7 @@ struct B6;
 impl<R, B> State<R, B> for B6 where R: Resource {
     const LABEL: States = States::B6;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -424,7 +462,7 @@ struct B5;
 impl<R, B> State<R, B> for B5 where R: Resource {
     const LABEL: States = States::B5;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -448,7 +486,7 @@ struct B4;
 impl<R, B> State<R, B> for B4 where R: Resource {
     const LABEL: States = States::B4;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -505,7 +543,7 @@ struct B3;
 impl<R, B> State<R, B> for B3 where R: Resource {
     const LABEL: States = States::B3;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -527,7 +565,7 @@ struct C3;
 impl<R, B> State<R, B> for C3 where R: Resource {
     const LABEL: States = States::C3;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -547,7 +585,7 @@ struct C4;
 impl<R, B> State<R, B> for C4 where R: Resource {
     const LABEL: States = States::C4;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -574,7 +612,7 @@ struct D4;
 impl<R, B> State<R, B> for D4 where R: Resource {
     const LABEL: States = States::D4;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -594,7 +632,7 @@ struct D5;
 impl<R, B> State<R, B> for D5 where R: Resource {
     const LABEL: States = States::D5;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -619,7 +657,7 @@ struct E5;
 impl<R, B> State<R, B> for E5 where R: Resource {
     const LABEL: States = States::D5;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -639,7 +677,7 @@ struct E6;
 impl<R, B> State<R, B> for E6 where R: Resource {
     const LABEL: States = States::E6;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -664,7 +702,7 @@ struct F6;
 impl<R, B> State<R, B> for F6 where R: Resource {
     const LABEL: States = States::F6;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -684,7 +722,7 @@ struct F7;
 impl<R, B> State<R, B> for F7 where R: Resource {
     const LABEL: States = States::F7;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -709,7 +747,7 @@ struct G7;
 impl<R, B> State<R, B> for G7 where R: Resource {
     const LABEL: States = States::G7;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
 
@@ -726,7 +764,7 @@ struct G8;
 impl<R, B> State<R, B> for G8 where R: Resource {
     const LABEL: States = States::G8;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -746,7 +784,7 @@ struct G9;
 impl<R, B> State<R, B> for G9 where R: Resource {
     const LABEL: States = States::G9;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -770,7 +808,7 @@ struct G11;
 impl<R, B> State<R, B> for G11 where R: Resource {
     const LABEL: States = States::G11;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let resource = &mut wrapper.resource;
 
         let request = &mut wrapper.request;
@@ -796,7 +834,7 @@ struct H10;
 impl<R, B> State<R, B> for H10 where R: Resource {
     const LABEL: States = States::H10;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         // TODO: we currently just skip through
         Ok(States::M16)
     }
@@ -809,7 +847,7 @@ struct M16;
 impl<R, B> State<R, B> for M16 where R: Resource {
     const LABEL: States = States::M16;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let request = &mut wrapper.request;
 
         if http::method::Method::DELETE == *request.method() {
@@ -825,7 +863,7 @@ struct N16;
 impl<R, B> State<R, B> for N16 where R: Resource {
     const LABEL: States = States::N16;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let request = &mut wrapper.request;
 
         if http::method::Method::POST == *request.method() {
@@ -842,7 +880,7 @@ struct O16;
 impl<R, B> State<R, B> for O16 where R: Resource {
     const LABEL: States = States::O16;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
         let request = &mut wrapper.request;
 
         if http::method::Method::PUT == *request.method() {
@@ -855,21 +893,32 @@ impl<R, B> State<R, B> for O16 where R: Resource {
 
 struct O18;
 
-//impl<'a, R, B, BD> State<R> for O18
-//    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>>,
-//          R: Debug,
-//          B: From<&'a [u8]>,
-//          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,
-
 impl<R, B> State<R, B> for O18 where R: Resource
 {
     const LABEL: States = States::O18;
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes> {
-        // TODO MULTIPLE CHOICES MISSING
-//        resource.response_mut().body_mut().send("hello!".as_bytes().into());
-        
-        Err(Outcomes::Halt(http::StatusCode::OK))
+    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
+        let resource = &mut wrapper.resource;
+        let response = &mut wrapper.response;
+        let request = &mut wrapper.request;
+
+        response.builder().status(200);
+
+        let content_type = request.headers().get("Content-Type");
+
+        if let Some(ct) = content_type {
+            let mime: mime::Mime = ct.to_str().unwrap().parse().unwrap();
+            let pair = resource.content_types_allowed().iter().find(|&&(ref m, handler)| *m == mime);
+
+            if let Some(&(_, handler)) = pair {
+                println!("found handler");
+                Err(Outcomes::Handle(handler))
+            } else {
+                panic!("No handler for content type.")
+            }
+        } else {
+            Err(Outcomes::StartResponse)
+        }
     }
 }
 
@@ -881,47 +930,29 @@ mod tests {
     use http;
     use resource::Resource;
     use mime;
+    use hyper;
 
     #[derive(Default, Debug)]
-    struct DefaultResource<B> where B: Default {
-        request: http::Request<B>,
-        response: http::Response<B>
+    struct DefaultResource {
+        request: http::Request<hyper::Body>,
+        response: http::Response<hyper::Body>
     }
 
-    impl<B> Resource for DefaultResource<B> where B: Default {
-        type Request = http::Request<B>;
-        type Response = http::Response<B>;
-
-        fn request(&self) -> &Self::Request {
-            &self.request
-        }
-
-        fn request_mut(&mut self) -> &mut Self::Request {
-            &mut self.request
-        }
-
-        fn response(&self) -> &Self::Response {
-            &self.response
-        }
-
-        fn response_mut(&mut self) -> &mut Self::Response {
-            &mut self.response
-        }
-
+    impl Resource for DefaultResource  {
         fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&Self) -> ())] {
-            &[(mime::TEXT_HTML, default_html::<B>)]
+            &[(mime::TEXT_HTML, default_html)]
         }
     }
 
-    fn default_html<B: Default>(resource: &DefaultResource<B>) -> () {
+    fn default_html(resource: &DefaultResource) -> () {
 
     }
 
     #[test]
     fn default() {
-        let resource: DefaultResource<Vec<u8>> = DefaultResource::default();
+        let resource = DefaultResource::default();
 
-        let flow = Flow::new(resource);
+        let flow = Flow::new();
 
         flow.execute();
     }

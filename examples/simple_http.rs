@@ -24,22 +24,23 @@ use futures::Future;
 struct DefaultResource;
 
 impl Resource for DefaultResource {
-//
-//    fn response(&self) -> &Self::Response {
-//        &self.response
-//    }
-//
-//    fn response_mut(&mut self) -> &mut Self::Response {
-//        &mut self.response
-//    }
-
-    fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&Self) -> ())] {
-        &[(mime::TEXT_HTML, default_html)]
+    fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&mut DefaultResource, &mut gerust::flow::DelayedResponse))] {
+        &[(mime::TEXT_HTML, DefaultResource::html)]
     }
 }
 
-fn default_html(resource: &DefaultResource) -> () {
+impl DefaultResource {
+    fn html(&mut self, resp: &mut gerust::flow::DelayedResponse) {
+        use futures::Sink;
 
+        let mut send = match *resp {
+            gerust::flow::DelayedResponse::Started(ref mut sender) => sender,
+            _ => panic!("Response should be started")
+        };
+
+        send.start_send(Ok("Hello, World!".into()));
+        send.poll_complete();
+    }
 }
 
 struct GerustService<'a> {
@@ -84,7 +85,7 @@ fn main() {
 
     let core = tokio_core::reactor::Core::new().unwrap();
 
-    let pool = futures_cpupool::CpuPool::new(4);
+    let pool = futures_cpupool::CpuPool::new(100);
 
     let remote = core.remote();
 
