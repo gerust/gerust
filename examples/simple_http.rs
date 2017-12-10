@@ -7,17 +7,23 @@ extern crate hyper;
 extern crate gerust;
 extern crate http;
 extern crate mime;
+extern crate futures;
+extern crate futures_cpupool;
+extern crate tokio_core;
 
 use gerust::resource::Resource;
-use gerust::flow::Flow;
+use gerust::flow::{Flow, HttpFlow};
 
 use hyper::header::{ContentLength, ContentType};
-use hyper::server::{Http, Response, const_service, service_fn};
+use hyper::server::{Http, const_service, service_fn};
+
+use futures::sync::oneshot;
+use futures::Future;
 
 #[derive(Debug)]
 struct DefaultResource<B> where B: Default {
     request: http::Request<B>,
-    response: http::Response<B>
+//    response: Option<http::Response<B>>
 }
 
 impl<B> Resource for DefaultResource<B> where B: Default {
@@ -31,14 +37,14 @@ impl<B> Resource for DefaultResource<B> where B: Default {
     fn request_mut(&mut self) -> &mut Self::Request {
         &mut self.request
     }
-
-    fn response(&self) -> &Self::Response {
-        &self.response
-    }
-
-    fn response_mut(&mut self) -> &mut Self::Response {
-        &mut self.response
-    }
+//
+//    fn response(&self) -> &Self::Response {
+//        &self.response
+//    }
+//
+//    fn response_mut(&mut self) -> &mut Self::Response {
+//        &mut self.response
+//    }
 
     fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&Self) -> ())] {
         &[(mime::TEXT_HTML, default_html::<B>)]
@@ -49,25 +55,61 @@ fn default_html<B: Default>(resource: &DefaultResource<B>) -> () {
 
 }
 
+struct GerustService<'a> {
+    pool: &'a futures_cpupool::CpuPool,
+    handle: tokio_core::reactor::Remote,
+   // body: std::marker::PhantomData<&'a B>
+}
+
+impl<'a> hyper::server::Service for GerustService<'a>
+    //where B: futures::Stream<Item = hyper::Chunk, Error = http::Error> + 'static
+{
+    type Request = http::Request<hyper::Body>;
+    type Response = http::Response<hyper::Body>;
+    type Error = hyper::Error;
+    type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
+
+    fn call(&self, req: Self::Request) -> Self::Future {
+        let (sx, rx): (futures::sync::oneshot::Sender<Self::Response>, _) = oneshot::channel::<Self::Response>();
+
+        let f = futures::future::lazy(move || {
+            let resource = DefaultResource { request: req };
+            let mut flow = HttpFlow::new();
+
+            flow.execute(resource, sx);
+            futures::future::ok::<(), ()>(())
+        });
+
+        let thread = self.pool.spawn(f);
+
+        self.handle.spawn(move |handle| {thread } );
+
+        // TODO: don't unwrap the response builder result here
+        Box::from(rx.or_else(|e| Ok(http::response::Builder::new()
+                .status(501).body("<h1>Internal Server Error</h1>".as_bytes().into()).unwrap())))
+    }
+}
+
 fn main() {
     env_logger::init().unwrap();
 
     let addr = ([127, 0, 0, 1], 3000).into();
 
-    let new_service = const_service(service_fn(|request| {
-        let (sender, body) = hyper::Body::pair();
-        let http_response = http::Response::builder().body(sender);
+    let core = tokio_core::reactor::Core::new().unwrap();
 
-        let resource = DefaultResource { request: request, response: sink };
-        let mut flow = Flow::new(resource);
-        flow.execute();
-        let DefaultResource { request, response } = flow.finish();
+    let pool = futures_cpupool::CpuPool::new(4);
 
-        Ok(response)
-    }));
+    let remote = core.remote();
 
-    let mut server = Http::new().bind_compat(&addr, new_service).unwrap();
-    server.no_proto();
+    let service = move || {
+        Ok(GerustService { pool: &pool, handle: remote.clone() })
+    };
+
+
+    let mut server = Http::new().bind_compat(&addr, service).unwrap();
+    //server.no_proto();
     println!("Listening on http://{} with 1 thread.", server.local_addr().unwrap());
     server.run().unwrap();
+
+//    core.run(server);
 }

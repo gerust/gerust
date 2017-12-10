@@ -1,10 +1,18 @@
 use http;
+use hyper;
+use futures;
 use futures::Stream;
 use futures::Sink;
+use futures::Future;
+use futures::future::err;
+use futures::sync::oneshot::Sender;
+
+use tokio_core::reactor::Handle;
 
 use resource::Resource;
 
 use std::fmt::Debug;
+use std;
 
 static DIAGRAM_VERSION: u8 = 3;
 
@@ -69,7 +77,8 @@ pub enum States {
 }
 
 #[derive(Debug)]
-enum Outcomes {
+pub enum Outcomes {
+    StartResponse,
     Halt(http::status::StatusCode)
 }
 
@@ -85,58 +94,100 @@ trait State<R> where R: Resource {
     fn execute(resource: &mut R) -> Result<States, Outcomes>;
 }
 
-#[derive(Debug)]
-pub struct Flow<R, B, BD> 
-    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>> + Debug,
-          B: AsRef<[u8]> + Debug + 'static,
-          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,
-{
-    resource: R,
-    state: States
+pub trait Flow<B> {
+    type Resource;
+    type Request;
+    type Response;
+    type Future;
+    type Error;
+
+    fn new() -> Self;
+
+    fn execute(&mut self, resource: Self::Resource, sx: Sender<Self::Response>)
+        where Self::Resource: Resource<Request=Self::Request, Response=Self::Response> + Debug;
+
+    fn transition(&mut self, resource: &mut Self::Resource) -> Result<(), Outcomes>
+        where Self::Resource: Resource<Request=Self::Request, Response=Self::Response>;
+
 }
 
-impl<R, B, BD> Flow<R, B, BD>
-    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>>,
-          R: Debug,
-          B: From<String> + Debug + AsRef<[u8]> + 'static,
-          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,
+#[derive(Debug)]
+pub struct HttpFlow<'a, R: 'a> {
+    resource: std::marker::PhantomData<&'a R>,
+    state: States,
+//    handle: Handle
+}
+
+pub struct FlowError;
+
+impl<'a, R, B> Flow<B> for HttpFlow<'a, R>
+    where R: Debug + Resource<Request = http::Request<B>, Response =  http::Response<hyper::Body>>,
+          B: futures::Stream<Item = hyper::Chunk, Error = hyper::Error> + 'static,
 {
-    pub fn new(resource: R) -> Flow<R, B, BD> {
-        Flow { resource, state: States::default() }
+    type Resource = R;
+    type Request = http::Request<B>;
+    type Response = http::Response<hyper::Body>;
+    type Error = FlowError;
+    type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
+
+    fn new() -> HttpFlow<'a, R> {
+        HttpFlow { resource: std::marker::PhantomData, state: START }
     }
 
-    pub fn finish(self) -> R {
-        let Flow { resource, state } = self;
+    fn execute(&mut self, mut resource: Self::Resource, sx: Sender<Self::Response>)
+        where Self::Resource: Resource<Request=Self::Request, Response=Self::Response> + Debug
+    {
+        let mut builder = http::response::Builder::new();
+        let mut status = None;
 
-        resource
+        loop {
+            //println!("transitioning from: {:?}", self);
+
+            let retval = self.transition(&mut resource);
+
+            match retval {
+                Ok(()) => {
+                    //println!("transitioned into: {:?}", self);
+                    continue;
+                },
+                Err(Outcomes::Halt(s)) => {
+                    status = Some(s);
+                    break;
+                }
+                _ => {}
+            };
+        }
+
+        let response: http::Response<hyper::Body> = builder.status(status.unwrap()).body("Hello World?".into()).unwrap();
+        sx.send(response);
     }
 
-    fn transition(&mut self) -> Result<(), Outcomes> {
-        let resource = &mut self.resource;
-
+    fn transition(&mut self, resource: &mut Self::Resource) -> Result<(), Outcomes>
+        where Self::Resource: Resource<Request=Self::Request, Response=Self::Response>
+    {
         let next = match self.state {
             States::B13 => { B13::execute(resource) },
             States::B12 => { B12::execute(resource) },
             States::B11 => { B11::execute(resource) },
             States::B10 => { B10::execute(resource) },
-            States::B9 => { B9::execute(resource) },
-            States::B8 => { B8::execute(resource) },
-            States::B7 => { B7::execute(resource) },
-            States::B6 => { B6::execute(resource) },
-            States::B5 => { B5::execute(resource) },
-            States::B4 => { B4::execute(resource) },
-            States::B3 => { B3::execute(resource) },
-            States::C3 => { C3::execute(resource) },
-            States::C4 => { C4::execute(resource) },
-            States::D4 => { D4::execute(resource) },
-            States::D5 => { D5::execute(resource) },
-            States::E5 => { E5::execute(resource) },
-            States::E6 => { E6::execute(resource) },
-            States::F6 => { F6::execute(resource) },
-            States::F7 => { F7::execute(resource) },
-            States::G7 => { G7::execute(resource) },
-            States::G8 => { G8::execute(resource) },
-            States::G9 => { G9::execute(resource) },
+            States::B9  => { B9::execute(resource) },
+            States::B8  => { B8::execute(resource) },
+            States::B7  => { B7::execute(resource) },
+            States::B6  => { B6::execute(resource) },
+            States::B5  => { B5::execute(resource) },
+            States::B4  => { B4::execute(resource) },
+            States::B3  => { B3::execute(resource) },
+            States::C3  => { C3::execute(resource) },
+            States::C4  => { C4::execute(resource) },
+            States::D4  => { D4::execute(resource) },
+            States::D5  => { D5::execute(resource) },
+            States::E5  => { E5::execute(resource) },
+            States::E6  => { E6::execute(resource) },
+            States::F6  => { F6::execute(resource) },
+            States::F7  => { F7::execute(resource) },
+            States::G7  => { G7::execute(resource) },
+            States::G8  => { G8::execute(resource) },
+            States::G9  => { G9::execute(resource) },
             States::G11 => { G11::execute(resource) },
             States::H10 => { H10::execute(resource) },
             States::M16 => { M16::execute(resource) },
@@ -150,23 +201,11 @@ impl<R, B, BD> Flow<R, B, BD>
 
         Ok(())
     }
-
-    pub fn execute(&mut self) {
-        println!("transitioning from: {:?}", self);
-
-        match self.transition() {
-            Ok(()) => {
-                println!("transitioned into: {:?}", self);
-                self.execute()
-            },
-            Err(e) => println!("Error or end: {:?}", e)
-        }
-    }
 }
 
 struct B13;
 
-impl<R, B> State<R> for B13 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B13 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B13;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -180,7 +219,7 @@ impl<R, B> State<R> for B13 where R: Resource<Request=http::Request<B>, Response
 
 struct B12;
 
-impl<R, B> State<R> for B12 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B12 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B12;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -195,7 +234,7 @@ impl<R, B> State<R> for B12 where R: Resource<Request=http::Request<B>, Response
 
 struct B11;
 
-impl<R, B> State<R> for B11 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B11 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B11;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -209,7 +248,7 @@ impl<R, B> State<R> for B11 where R: Resource<Request=http::Request<B>, Response
 
 struct B10;
 
-impl<R, B> State<R> for B10 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B, RB> State<R> for B10 where R: Resource<Request=http::Request<B>, Response=http::Response<RB>> {
     const LABEL: States = States::B10;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -218,8 +257,9 @@ impl<R, B> State<R> for B10 where R: Resource<Request=http::Request<B>, Response
         } else {
             let header= http::header::HeaderValue::from_str(&resource.allowed_methods().iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")).unwrap();
 
-            resource.response_mut().headers_mut()
-                .insert(http::header::ACCEPT, header);
+            //TODO: acutally send headers
+//            resource.response_mut().headers_mut()
+//                .insert(http::header::ACCEPT, header);
 
             Err(Outcomes::Halt(http::StatusCode::METHOD_NOT_ALLOWED))
         }
@@ -228,7 +268,7 @@ impl<R, B> State<R> for B10 where R: Resource<Request=http::Request<B>, Response
 
 struct B9;
 
-impl<R, B> State<R> for B9 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B9 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B9;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -261,7 +301,7 @@ impl<R, B> State<R> for B9 where R: Resource<Request=http::Request<B>, Response=
 
 struct B8;
 
-impl<R, B> State<R> for B8 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B8 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B8;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -278,7 +318,7 @@ impl<R, B> State<R> for B8 where R: Resource<Request=http::Request<B>, Response=
 
 struct B7;
 
-impl<R, B> State<R> for B7 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B7 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B7;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -292,7 +332,7 @@ impl<R, B> State<R> for B7 where R: Resource<Request=http::Request<B>, Response=
 
 struct B6;
 
-impl<R, B> State<R> for B6 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B6 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B6;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -309,18 +349,17 @@ impl<R, B> State<R> for B6 where R: Resource<Request=http::Request<B>, Response=
 
 struct B5;
 
-impl<R, B> State<R> for B5 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B5 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B5;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
         let content_type = resource.request().headers().get("Content-Type");
 
-        println!("headers: {:?}", resource.request().headers());
-
-        println!("content-type: {:?}", content_type);
+        let default = http::header::HeaderValue::from_str("application/octet-stream").unwrap();
+        let ct = content_type.unwrap_or(&default);
 
         // TODO: Properly handle Content-Type not being given
-        if resource.known_content_type(content_type.unwrap()) {
+        if resource.known_content_type(ct) {
             Ok(States::B4)
         } else {
             Err(Outcomes::Halt(http::StatusCode::UNSUPPORTED_MEDIA_TYPE))
@@ -330,24 +369,60 @@ impl<R, B> State<R> for B5 where R: Resource<Request=http::Request<B>, Response=
 
 struct B4;
 
-impl<R, B> State<R> for B4 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B4 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B4;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
+        use http::method::Method;
+
         let content_length = resource.request().headers().get("Content-Length");
+        let transfer_encoding = resource.request().headers().get("Transfer-Encoding");
+
+        match *resource.request().method() {
+            Method::GET | Method::HEAD | Method::OPTIONS => {
+                if content_length.is_some() {
+                    // TODO: Communicate _why_ it is a BAD_REQUEST
+                    return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                } else {
+                    return Ok(States::B3)
+                }
+            },
+            _ => {}
+        }
+
+        if transfer_encoding.is_some() && content_length.is_some() {
+            // TODO: Communicate _why_ it is a BAD_REQUEST
+            return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+        }
 
         // TODO: Properly handle Content-Length not being given
-        if resource.valid_entity_length(content_length.unwrap().to_str().unwrap().parse().unwrap()) {
-            Ok(States::B3)
+        if let Some(cl) = content_length {
+            if let Ok(stringed) = cl.to_str() {
+                if let Ok(parsed) = stringed.parse() {
+                    if resource.valid_entity_length(parsed) {
+                        Ok(States::B3)
+                    } else {
+                        Err(Outcomes::Halt(http::StatusCode::PAYLOAD_TOO_LARGE))
+                    }
+                } else {
+                    // TODO: Communicate _why_ it is a BAD_REQUEST
+                    return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                }
+            } else {
+                // TODO: Communicate _why_ it is a BAD_REQUEST
+                return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+            }
         } else {
-            Err(Outcomes::Halt(http::StatusCode::PAYLOAD_TOO_LARGE))
+            // TODO: Communicate _why_ it is a BAD_REQUEST
+            return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
         }
+
     }
 }
 
 struct B3;
 
-impl<R, B> State<R> for B3 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for B3 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::B3;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -365,7 +440,7 @@ impl<R, B> State<R> for B3 where R: Resource<Request=http::Request<B>, Response=
 
 struct C3;
 
-impl<R, B> State<R> for C3 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for C3 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::C3;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -381,7 +456,7 @@ impl<R, B> State<R> for C3 where R: Resource<Request=http::Request<B>, Response=
 
 struct C4;
 
-impl<R, B> State<R> for C4 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for C4 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::C4;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -404,7 +479,7 @@ impl<R, B> State<R> for C4 where R: Resource<Request=http::Request<B>, Response=
 
 struct D4;
 
-impl<R, B> State<R> for D4 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for D4 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::D4;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -420,7 +495,7 @@ impl<R, B> State<R> for D4 where R: Resource<Request=http::Request<B>, Response=
 
 struct D5;
 
-impl<R, B> State<R> for D5 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for D5 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::D5;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -441,7 +516,7 @@ impl<R, B> State<R> for D5 where R: Resource<Request=http::Request<B>, Response=
 
 struct E5;
 
-impl<R, B> State<R> for E5 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for E5 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::D5;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -457,7 +532,7 @@ impl<R, B> State<R> for E5 where R: Resource<Request=http::Request<B>, Response=
 
 struct E6;
 
-impl<R, B> State<R> for E6 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for E6 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::E6;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -478,7 +553,7 @@ impl<R, B> State<R> for E6 where R: Resource<Request=http::Request<B>, Response=
 
 struct F6;
 
-impl<R, B> State<R> for F6 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for F6 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::F6;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -494,7 +569,7 @@ impl<R, B> State<R> for F6 where R: Resource<Request=http::Request<B>, Response=
 
 struct F7;
 
-impl<R, B> State<R> for F7 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for F7 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::F7;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -515,7 +590,7 @@ impl<R, B> State<R> for F7 where R: Resource<Request=http::Request<B>, Response=
 
 struct G7;
 
-impl<R, B> State<R> for G7 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for G7 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::G7;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -529,7 +604,7 @@ impl<R, B> State<R> for G7 where R: Resource<Request=http::Request<B>, Response=
 
 struct G8;
 
-impl<R, B> State<R> for G8 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for G8 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::G8;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -545,7 +620,7 @@ impl<R, B> State<R> for G8 where R: Resource<Request=http::Request<B>, Response=
 
 struct G9;
 
-impl<R, B> State<R> for G9 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for G9 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::G9;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -565,7 +640,7 @@ impl<R, B> State<R> for G9 where R: Resource<Request=http::Request<B>, Response=
 
 struct G11;
 
-impl<R, B> State<R> for G11 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for G11 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::G11;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -587,7 +662,7 @@ impl<R, B> State<R> for G11 where R: Resource<Request=http::Request<B>, Response
 
 struct H10;
 
-impl<R, B> State<R> for H10 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for H10 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::H10;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -600,7 +675,7 @@ impl<R, B> State<R> for H10 where R: Resource<Request=http::Request<B>, Response
 
 struct M16;
 
-impl<R, B> State<R> for M16 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for M16 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::M16;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -614,7 +689,7 @@ impl<R, B> State<R> for M16 where R: Resource<Request=http::Request<B>, Response
 
 struct N16;
 
-impl<R, B> State<R> for N16 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for N16 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::N16;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -629,7 +704,7 @@ impl<R, B> State<R> for N16 where R: Resource<Request=http::Request<B>, Response
 
 struct O16;
 
-impl<R, B> State<R> for O16 where R: Resource<Request=http::Request<B>, Response=http::Response<B>> {
+impl<R, B> State<R> for O16 where R: Resource<Request=http::Request<B>> {
     const LABEL: States = States::O16;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
@@ -643,17 +718,19 @@ impl<R, B> State<R> for O16 where R: Resource<Request=http::Request<B>, Response
 
 struct O18;
 
-impl<R, B, BD> State<R> for O18 
-    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>>,
-          R: Debug,
-          B: From<String>,
-          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,          
+//impl<'a, R, B, BD> State<R> for O18
+//    where R: Resource<Request=http::Request<BD>, Response=http::Response<BD>>,
+//          R: Debug,
+//          B: From<&'a [u8]>,
+//          BD: Sink<SinkItem=B, SinkError=http::Error> + Debug,
+
+impl<R, B> State<R> for O18 where R: Resource<Request=http::Request<B>>
 {
     const LABEL: States = States::O18;
 
     fn execute(resource: &mut R) -> Result<States, Outcomes> {
         // TODO MULTIPLE CHOICES MISSING
-        resource.response_mut().body_mut().send(B::from("hello!".to_string()));
+//        resource.response_mut().body_mut().send("hello!".as_bytes().into());
         
         Err(Outcomes::Halt(http::StatusCode::OK))
     }
