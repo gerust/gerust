@@ -9,7 +9,6 @@ use futures::sync::oneshot::Sender;
 use resource::Resource;
 
 use std::fmt::Debug;
-use std::ops::Deref;
 
 pub static DIAGRAM_VERSION: u8 = 3;
 
@@ -89,7 +88,6 @@ impl Flow for HttpFlow
                 Outcomes::Next(f) => {
                     //println!("transitioned into: {:?}", self);
                     current = f(&mut wrapper);
-
                     continue;
                 },
                 Outcomes::StartResponse => {

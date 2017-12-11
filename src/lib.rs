@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 extern crate http;
 extern crate mime;
 extern crate futures;
@@ -6,3 +9,4 @@ extern crate hyper;
 
 pub mod resource;
 pub mod flow;
+pub mod server;
