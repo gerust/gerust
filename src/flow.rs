@@ -515,7 +515,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
         if let Some(ct) = content_type {
             let mime: mime::Mime = ct.to_str().unwrap().parse().unwrap();
-            let pair = self.resource.content_types_allowed().iter().find(|&&(ref m, _)| *m == mime);
+            let pair = self.resource.content_types_accepted().iter().find(|&&(ref m, _)| *m == mime);
 
             if let Some(&(_, handler)) = pair {
                 Outcomes::Handle(handler)

@@ -1,42 +1,47 @@
-#[macro_use]
-extern crate log;
 extern crate env_logger;
 
-extern crate hyper;
-
 extern crate gerust;
-extern crate http;
 extern crate mime;
 extern crate futures;
-extern crate futures_cpupool;
-extern crate tokio_core;
+extern crate http;
 
 use gerust::resource::Resource;
-use gerust::flow::{Flow, HttpFlow};
 
-use hyper::server::{Http};
-
-use futures::sync::oneshot;
-use futures::Future;
+use futures::sink::Sink;
 
 #[derive(Debug, Default)]
-struct DefaultResource;
+struct OrderResource;
 
-impl Resource for DefaultResource {
-    fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&mut DefaultResource, &mut gerust::flow::DelayedResponse))] {
-        &[(mime::TEXT_HTML, DefaultResource::html)]
+impl Resource for OrderResource {
+    fn allowed_methods(&self) -> &'static [http::Method] {
+        use http::method::Method;
+
+        &[Method::GET, Method::HEAD, Method::PUT, Method::POST]
+    }
+
+    fn content_types_provided(&self) -> &'static [(mime::Mime, fn(&mut OrderResource, &mut gerust::flow::DelayedResponse))] {
+        &[(mime::TEXT_HTML, OrderResource::to_html)]
+    }
+
+    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn(&mut OrderResource, &mut gerust::flow::DelayedResponse))] {
+        &[(mime::APPLICATION_JSON, OrderResource::from_json)]
     }
 }
 
-impl DefaultResource {
-    fn html(&mut self, resp: &mut gerust::flow::DelayedResponse) {
+impl OrderResource {
+    fn to_html(&mut self, resp: &mut gerust::flow::DelayedResponse) {
         use futures::Sink;
 
         resp.response_body().start_send(Ok("Hello, World!".into()));
     }
+
+    fn from_json(&mut self, resp: &mut gerust::flow::DelayedResponse) {
+
+    }
 }
 
 fn main() {
-    env_logger::init();
-    gerust::server::run_server::<DefaultResource>(100)
+    env_logger::init().unwrap();
+    // TBD Dispatching over multiple resources
+    gerust::server::run_server::<OrderResource>(100)
 }
