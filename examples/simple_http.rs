@@ -39,11 +39,9 @@ impl DefaultResource {
 struct GerustService<'a> {
     pool: &'a futures_cpupool::CpuPool,
     handle: tokio_core::reactor::Remote,
-   // body: std::marker::PhantomData<&'a B>
 }
 
 impl<'a> hyper::server::Service for GerustService<'a>
-    //where B: futures::Stream<Item = hyper::Chunk, Error = http::Error> + 'static
 {
     type Request = http::Request<hyper::Body>;
     type Response = http::Response<hyper::Body>;
@@ -90,6 +88,4 @@ fn main() {
     //server.no_proto();
     info!("Listening on http://{} with 1 thread.", server.local_addr().unwrap());
     server.run().unwrap();
-
-//    core.run(server);
 }
