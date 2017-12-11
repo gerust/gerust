@@ -11,7 +11,7 @@ pub trait Resource where Self: 'static {
         true
     }
 
-    fn is_authorized(&self, authorization_header: Option<&http::header::HeaderValue>) -> bool {
+    fn is_authorized(&self, _authorization_header: Option<&http::header::HeaderValue>) -> bool {
         true
     }
 
@@ -31,15 +31,15 @@ pub trait Resource where Self: 'static {
         false
     }
 
-    fn known_content_type(&self, content_type: &http::header::HeaderValue) -> bool {
+    fn known_content_type(&self, _content_type: &http::header::HeaderValue) -> bool {
         true
     }
 
-    fn valid_content_headers<'a, I: Iterator<Item=(&'a http::header::HeaderName, &'a http::header::HeaderValue)>>(&self, content_headers: I) -> bool {
+    fn valid_content_headers<'a, I: Iterator<Item=(&'a http::header::HeaderName, &'a http::header::HeaderValue)>>(&self, _content_headers: I) -> bool {
         true
     }
 
-    fn valid_entity_length(&self, len: u64) -> bool {
+    fn valid_entity_length(&self, _len: u64) -> bool {
         true
     }
 
@@ -141,7 +141,7 @@ pub trait Resource where Self: 'static {
     }
 
     /// TODO: currently unsure if I want to adopt this API
-    fn handle_error(e: Box<std::any::Any>) {
+    fn handle_error(_e: Box<std::any::Any>) {
 
     }
 

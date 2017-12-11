@@ -14,8 +14,7 @@ extern crate tokio_core;
 use gerust::resource::Resource;
 use gerust::flow::{Flow, HttpFlow};
 
-use hyper::header::{ContentLength, ContentType};
-use hyper::server::{Http, const_service, service_fn};
+use hyper::server::{Http};
 
 use futures::sync::oneshot;
 use futures::Future;
@@ -33,13 +32,7 @@ impl DefaultResource {
     fn html(&mut self, resp: &mut gerust::flow::DelayedResponse) {
         use futures::Sink;
 
-        let mut send = match *resp {
-            gerust::flow::DelayedResponse::Started(ref mut sender) => sender,
-            _ => panic!("Response should be started")
-        };
-
-        send.start_send(Ok("Hello, World!".into()));
-        send.poll_complete();
+        resp.response_body().start_send(Ok("Hello, World!".into()));
     }
 }
 
@@ -70,11 +63,11 @@ impl<'a> hyper::server::Service for GerustService<'a>
 
         let thread = self.pool.spawn(f);
 
-        self.handle.spawn(move |handle| {thread } );
+        self.handle.spawn(move |_handle| { thread } );
 
         // TODO: don't unwrap the response builder result here
-        Box::from(rx.or_else(|e| Ok(http::response::Builder::new()
-                .status(501).body("<h1>Internal Server Error</h1>".as_bytes().into()).unwrap())))
+        Box::from(rx.or_else(|_| Ok(http::response::Builder::new()
+                .status(501).body(b"<h1>Internal Server Error</h1>".as_ref().into()).unwrap())))
     }
 }
 
@@ -93,10 +86,9 @@ fn main() {
         Ok(GerustService { pool: &pool, handle: remote.clone() })
     };
 
-
-    let mut server = Http::new().bind_compat(&addr, service).unwrap();
+    let server = Http::new().bind_compat(&addr, service).unwrap();
     //server.no_proto();
-    println!("Listening on http://{} with 1 thread.", server.local_addr().unwrap());
+    info!("Listening on http://{} with 1 thread.", server.local_addr().unwrap());
     server.run().unwrap();
 
 //    core.run(server);

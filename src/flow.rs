@@ -2,88 +2,25 @@ use http;
 use hyper;
 use mime;
 use futures;
-use futures::Stream;
 use futures::Sink;
 use futures::Future;
-use futures::future::err;
 use futures::sync::oneshot::Sender;
-
-use tokio_core::reactor::Handle;
 
 use resource::Resource;
 
 use std::fmt::Debug;
-use std;
+use std::ops::Deref;
 
-static DIAGRAM_VERSION: u8 = 3;
+pub static DIAGRAM_VERSION: u8 = 3;
 
-static START: States = States::B13;
-
-#[derive(Debug, Clone, Copy)]
-pub enum States {
-    B13,
-    B12,
-    B11,
-    B10,
-    B9,
-    B8,
-    B7,
-    B6,
-    B5,
-    B4,
-    B3,
-    C3,
-    C4,
-    D4,
-    D5,
-    E5,
-    E6,
-    F6,
-    F7,
-    G7,
-    G8,
-    G9,
-    G11,
-    H7,
-    H10,
-    H11,
-    H12,
-    I4,
-    I7,
-    I12,
-    I13,
-    J18,
-    K5,
-    K7,
-    K13,
-    L5,
-    L7,
-    L13,
-    L14,
-    L15,
-    L17,
-    M5,
-    M7,
-    M16,
-    M20,
-    N5,
-    N11,
-    N16,
-    O14,
-    O16,
-    O18,
-    O20,
-    P3,
-    P11
-}
-
-pub enum Outcomes<R> {
+pub enum Outcomes<R, B> where R: Resource {
+    Next(StateFn<R, B>),
     StartResponse,
     Handle(fn (&mut R, &mut DelayedResponse) -> ()),
-    Halt(http::status::StatusCode)
+    Halt(http::status::StatusCode),
 }
 
-// TODO: Maybe turn into struct, holding body and builder?
+// TODO: Maybe turn into struct,     holding body and builder?
 pub enum DelayedResponse {
     Waiting(http::response::Builder),
     Started(futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>>)
@@ -102,42 +39,12 @@ impl DelayedResponse {
         }
     }
 
-    fn response_body(&mut self) -> &mut futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>> {
+    pub fn response_body(&mut self) -> &mut futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>> {
         match *self {
             DelayedResponse::Started(ref mut r) => r,
             _ => { panic!("called response() before response has started!") }
         }
     }
-}
-
-//TODO: Should be "ResourceWrapper"
-pub struct ResponseWrapper<R, B>
-    where R: Resource {
-    resource: R,
-    request: http::Request<B>,
-    response: DelayedResponse
-}
-
-impl<R, B> ResponseWrapper<R, B>
-    where R: Resource
-{
-    fn new(resource: R, request: http::Request<B>) -> Self {
-        let delay = DelayedResponse::new();
-
-        ResponseWrapper { resource: resource, request: request, response: delay }
-    }
-}
-
-impl Default for States {
-    fn default() -> States {
-        START
-    }
-}
-
-trait State<R, B> where R: Resource {
-    const LABEL: States;
-
-    fn execute(response: &mut ResponseWrapper<R ,B>) -> Result<States, Outcomes<R>>;
 }
 
 pub trait Flow {
@@ -150,16 +57,10 @@ pub trait Flow {
 
     fn execute<R>(&mut self, resource: R, request: Self::Request, sx: Sender<Self::Response>)
         where R: Resource + Debug;
-
-    fn transition<R, B>(&mut self, response_wrapper: &mut ResponseWrapper<R, B>) -> Result<(), Outcomes<R>>
-        where R: Resource;
 }
 
 #[derive(Debug)]
-pub struct HttpFlow {
-    state: States,
-//    handle: Handle
-}
+pub struct HttpFlow;
 
 pub struct FlowError;
 
@@ -171,27 +72,29 @@ impl Flow for HttpFlow
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn new() -> HttpFlow {
-        HttpFlow { state: START }
+        HttpFlow
     }
 
-    fn execute<R>(&mut self, mut resource: R, request: Self::Request, sx: Sender<Self::Response>)
+    fn execute<R>(&mut self, resource: R, request: Self::Request, sx: Sender<Self::Response>)
         where R: Resource + Debug
     {
-        let mut wrapper = ResponseWrapper::new(resource, request);
+        let mut wrapper = ResourceWrapper::new(resource, request);
 
-        let mut status = None;
+        let mut current = StateFn(ResourceWrapper::b13);
 
         loop {
             //println!("transitioning from: {:?}", self);
 
-            let retval = self.transition(&mut wrapper);
+            let retval = current(&mut wrapper);
 
             match retval {
-                Ok(()) => {
+                Outcomes::Next(f) => {
                     //println!("transitioned into: {:?}", self);
+                    current = f;
+
                     continue;
                 },
-                Err(Outcomes::StartResponse) => {
+                Outcomes::StartResponse => {
                     //println!("received StartResponse!");
 
                     let (sink, body) = hyper::Body::pair();
@@ -202,7 +105,7 @@ impl Flow for HttpFlow
                     //println!("response started: {:?}", self);
                     break;
                 },
-                Err(Outcomes::Handle(handler)) => {
+                Outcomes::Handle(handler) => {
                     //println!("handling!");
                     let (sink, body) = hyper::Body::pair();
                     // TODO: Fail properly
@@ -211,298 +114,170 @@ impl Flow for HttpFlow
                     sx.send(response);
                     //println!("response started: {:?}", self);
                     handler(&mut wrapper.resource, &mut wrapper.response);
+
+                    wrapper.response.response_body().poll_complete();
                     break;
                 },
-                Err(Outcomes::Halt(s)) => {
-                    status = Some(s);
-                    let response: http::Response<hyper::Body> = wrapper.response.builder().status(status.unwrap()).body("Hello World?".into()).unwrap();
+                Outcomes::Halt(s) => {
+                    let response: http::Response<hyper::Body> = wrapper.response.builder().status(s).body(s.canonical_reason().unwrap().into()).unwrap();
                     sx.send(response);
                     break;
                 }
-                _ => {}
             };
         }
-//
-//        loop {
-//            println!("transitioning from: {:?}", self);
-//
-//            let retval = self.transition(&mut wrapper);
-//
-//            match retval {
-//                Ok(()) => {
-//                    println!("transitioned into: {:?}", self);
-//                    continue;
-//                },
-//                Err(Outcomes::StartResponse) => {
-//                    unreachable!();
-//                },
-//                Err(Outcomes::Halt(s)) => {
-//                    unreachable!();
-//                }
-//                _ => {}
-//            };
-//        }
-
-
-    }
-
-    fn transition<R, B>(&mut self, response_wrapper: &mut ResponseWrapper<R, B>) -> Result<(), Outcomes<R>>
-        where R: Resource
-    {
-        // TODO: clean this renaming up
-        let resource = response_wrapper;
-
-        let next = match self.state {
-            States::B13 => { B13::execute(resource) },
-            States::B12 => { B12::execute(resource) },
-            States::B11 => { B11::execute(resource) },
-            States::B10 => { B10::execute(resource) },
-            States::B9  => { B9::execute(resource) },
-            States::B8  => { B8::execute(resource) },
-            States::B7  => { B7::execute(resource) },
-            States::B6  => { B6::execute(resource) },
-            States::B5  => { B5::execute(resource) },
-            States::B4  => { B4::execute(resource) },
-            States::B3  => { B3::execute(resource) },
-            States::C3  => { C3::execute(resource) },
-            States::C4  => { C4::execute(resource) },
-            States::D4  => { D4::execute(resource) },
-            States::D5  => { D5::execute(resource) },
-            States::E5  => { E5::execute(resource) },
-            States::E6  => { E6::execute(resource) },
-            States::F6  => { F6::execute(resource) },
-            States::F7  => { F7::execute(resource) },
-            States::G7  => { G7::execute(resource) },
-            States::G8  => { G8::execute(resource) },
-            States::G9  => { G9::execute(resource) },
-            States::G11 => { G11::execute(resource) },
-            States::H10 => { H10::execute(resource) },
-            States::M16 => { M16::execute(resource) },
-            States::N16 => { N16::execute(resource) },
-            States::O16 => { O16::execute(resource) },
-            States::O18 => { O18::execute(resource) },
-            _ => { unimplemented!() },
-        }?;
-
-        self.state = next;
-
-        Ok(())
     }
 }
 
-struct B13;
+pub struct ResourceWrapper<R, B>
+    where R: Resource {
+    resource: R,
+    request: http::Request<B>,
+    response: DelayedResponse
+}
 
-impl<R, B> State<R, B> for B13 where R: Resource {
-    const LABEL: States = States::B13;
+impl<R, B> ResourceWrapper<R, B>
+    where R: Resource
+{
+    fn new(resource: R, request: http::Request<B>) -> Self {
+        let delay = DelayedResponse::new();
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        if wrapper.resource.service_available() {
-            Ok(States::B12)
+        ResourceWrapper { resource: resource, request: request, response: delay }
+    }
+}
+
+pub struct StateFn<R, B>(fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>) where R: Resource;
+
+impl<R, B> Deref for StateFn<R, B> where R: Resource {
+    type Target = fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<R, B> ResourceWrapper<R, B> where R: Resource {
+    fn b13(&mut self) -> Outcomes<R, B> {
+        if self.resource.service_available() {
+            Outcomes::Next(StateFn(Self::b12))
         } else {
-            Err(Outcomes::Halt(http::StatusCode::SERVICE_UNAVAILABLE))
+            Outcomes::Halt(http::StatusCode::SERVICE_UNAVAILABLE)
         }
     }
-}
 
-struct B12;
-
-impl<R, B> State<R, B> for B12 where R: Resource {
-    const LABEL: States = States::B12;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-        let request = &mut wrapper.request;
-
-        if resource.known_methods().contains(request.method()) {
-            Ok(States::B11)
+    fn b12(&mut self) -> Outcomes<R, B> {
+        if self.resource.known_methods().contains(self.request.method()) {
+            Outcomes::Next(StateFn(Self::b11))
         } else {
-            Err(Outcomes::Halt(http::StatusCode::NOT_IMPLEMENTED))
+            Outcomes::Halt(http::StatusCode::NOT_IMPLEMENTED)
         }
     }
-}
 
-struct B11;
-
-impl<R, B> State<R, B> for B11 where R: Resource {
-    const LABEL: States = States::B11;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        if resource.uri_too_long(request.uri()) {
-            Err(Outcomes::Halt(http::StatusCode::URI_TOO_LONG))
+    fn b11(&mut self) -> Outcomes<R, B> {
+        if self.resource.uri_too_long(self.request.uri()) {
+            Outcomes::Halt(http::StatusCode::URI_TOO_LONG)
         } else {
-            Ok(States::B10)
+            Outcomes::Next(StateFn(Self::b10))
         }
     }
-}
 
-struct B10;
+    fn b10(&mut self) -> Outcomes<R, B> {
+        let builder = self.response.builder();
 
-impl<R, B> State<R, B> for B10 where R: Resource {
-    const LABEL: States = States::B10;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-        let builder = wrapper.response.builder();
-
-        if resource.allowed_methods().contains(request.method()) {
-            Ok(States::B9)
+        if self.resource.allowed_methods().contains(self.request.method()) {
+            Outcomes::Next(StateFn(Self::b9))
         } else {
-            let header= http::header::HeaderValue::from_str(&resource.allowed_methods().iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")).unwrap();
+            let header = http::header::HeaderValue::from_str(&self.resource.allowed_methods().iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")).unwrap();
 
             builder.header(http::header::ACCEPT, header);
 
-            Err(Outcomes::Halt(http::StatusCode::METHOD_NOT_ALLOWED))
+            Outcomes::Halt(http::StatusCode::METHOD_NOT_ALLOWED)
         }
     }
-}
 
-struct B9;
-
-impl<R, B> State<R, B> for B9 where R: Resource {
-    const LABEL: States = States::B9;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-
-        if let Some(result) = resource.validate_content_checksum() {
+    fn b9(&mut self) -> Outcomes<R, B> {
+        if let Some(result) = self.resource.validate_content_checksum() {
             if result {
-                if resource.malformed_request() {
-                    Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                if self.resource.malformed_request() {
+                    Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 } else {
-                    Ok(States::B8)
+                    Outcomes::Next(StateFn(Self::b8))
                 }
             } else {
                 //resource.response_mut().body("Content-MD5 header does not match request body.")
-                Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                Outcomes::Halt(http::StatusCode::BAD_REQUEST)
             }
         } else {
             // TODO: MD5 validation of body
             let valid = true;
             if valid {
-                if resource.malformed_request() {
-                    Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                if self.resource.malformed_request() {
+                    Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 } else {
-                    Ok(States::B8)
+                    Outcomes::Next(StateFn(Self::b8))
                 }
             } else {
-                Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                Outcomes::Halt(http::StatusCode::BAD_REQUEST)
             }
         }
     }
-}
 
-struct B8;
-
-impl<R, B> State<R, B> for B8 where R: Resource {
-    const LABEL: States = States::B8;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let auth_header = request.headers().get(http::header::AUTHORIZATION);
+    fn b8(&mut self) -> Outcomes<R, B> {
+        let auth_header = self.request.headers().get(http::header::AUTHORIZATION);
 
         // TODO: Implement full is_authorized protocol
-        if resource.is_authorized(auth_header) {
-            Ok(States::B7)
+        if self.resource.is_authorized(auth_header) {
+            Outcomes::Next(StateFn(Self::b7))
         } else {
-            Err(Outcomes::Halt(http::StatusCode::UNAUTHORIZED))
+            Outcomes::Halt(http::StatusCode::UNAUTHORIZED)
         }
     }
-}
 
-struct B7;
-
-impl<R, B> State<R, B> for B7 where R: Resource {
-    const LABEL: States = States::B7;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-
-        if resource.forbidden() {
-            Err(Outcomes::Halt(http::StatusCode::FORBIDDEN))
+    fn b7(&mut self) -> Outcomes<R, B> {
+        if self.resource.forbidden() {
+            Outcomes::Halt(http::StatusCode::FORBIDDEN)
         } else {
-            Ok(States::B6)
+            Outcomes::Next(StateFn(Self::b6))
         }
     }
-}
 
-struct B6;
-
-impl<R, B> State<R, B> for B6 where R: Resource {
-    const LABEL: States = States::B6;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let headers = request.headers().iter()
+    fn b6(&mut self) -> Outcomes<R, B> {
+        let headers = self.request.headers().iter()
             .filter(|&(name, _)| name.as_str().starts_with("CONTENT-"));
 
-        if resource.valid_content_headers(headers) {
-            Ok(States::B5)
+        if self.resource.valid_content_headers(headers) {
+            Outcomes::Next(StateFn(Self::b5))
         } else {
-            Err(Outcomes::Halt(http::StatusCode::NOT_IMPLEMENTED))
+            Outcomes::Halt(http::StatusCode::NOT_IMPLEMENTED)
         }
     }
-}
 
-struct B5;
+    fn b5(&mut self) -> Outcomes<R, B> {
+        let content_type = self.request.headers().get("Content-Type");
 
-impl<R, B> State<R, B> for B5 where R: Resource {
-    const LABEL: States = States::B5;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let content_type = request.headers().get("Content-Type");
-
+        // Default Content-Type is application/octet-stream. https://www.w3.org/Protocols/rfc2616/rfc2616-sec7.html#sec7.2.1
         let default = http::header::HeaderValue::from_str("application/octet-stream").unwrap();
         let ct = content_type.unwrap_or(&default);
 
-        // TODO: Properly handle Content-Type not being given
-        if resource.known_content_type(ct) {
-            Ok(States::B4)
+        if self.resource.known_content_type(ct) {
+            Outcomes::Next(StateFn(Self::b4))
         } else {
-            Err(Outcomes::Halt(http::StatusCode::UNSUPPORTED_MEDIA_TYPE))
+            Outcomes::Halt(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
         }
     }
-}
 
-struct B4;
-
-impl<R, B> State<R, B> for B4 where R: Resource {
-    const LABEL: States = States::B4;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
+    fn b4(&mut self) -> Outcomes<R, B> {
         use http::method::Method;
 
-        let content_length = request.headers().get("Content-Length");
-        let transfer_encoding = request.headers().get("Transfer-Encoding");
+        let content_length = self.request.headers().get("Content-Length");
+        let transfer_encoding = self.request.headers().get("Transfer-Encoding");
 
-        match *request.method() {
+        match *self.request.method() {
             Method::GET | Method::HEAD | Method::OPTIONS => {
                 if content_length.is_some() {
                     // TODO: Communicate _why_ it is a BAD_REQUEST
-                    return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                    return Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 } else {
-                    return Ok(States::B3)
+                    return Outcomes::Next(StateFn(Self::b3))
                 }
             },
             _ => {}
@@ -510,419 +285,262 @@ impl<R, B> State<R, B> for B4 where R: Resource {
 
         if transfer_encoding.is_some() && content_length.is_some() {
             // TODO: Communicate _why_ it is a BAD_REQUEST
-            return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+            return Outcomes::Halt(http::StatusCode::BAD_REQUEST)
         }
 
-        // TODO: Properly handle Content-Length not being given
         if let Some(cl) = content_length {
             if let Ok(stringed) = cl.to_str() {
                 if let Ok(parsed) = stringed.parse() {
-                    if resource.valid_entity_length(parsed) {
-                        Ok(States::B3)
+                    if self.resource.valid_entity_length(parsed) {
+                        Outcomes::Next(StateFn(Self::b3))
                     } else {
-                        Err(Outcomes::Halt(http::StatusCode::PAYLOAD_TOO_LARGE))
+                        Outcomes::Halt(http::StatusCode::PAYLOAD_TOO_LARGE)
                     }
                 } else {
                     // TODO: Communicate _why_ it is a BAD_REQUEST
-                    return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                    Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 }
             } else {
                 // TODO: Communicate _why_ it is a BAD_REQUEST
-                return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+                Outcomes::Halt(http::StatusCode::BAD_REQUEST)
             }
         } else {
             // TODO: Communicate _why_ it is a BAD_REQUEST
-            return Err(Outcomes::Halt(http::StatusCode::BAD_REQUEST))
+            Outcomes::Halt(http::StatusCode::BAD_REQUEST)
         }
-
     }
-}
 
-struct B3;
+    fn b3(&mut self) -> Outcomes<R, B> {
+        let method = self.request.method();
 
-impl<R, B> State<R, B> for B3 where R: Resource {
-    const LABEL: States = States::B3;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let method = request.method();
-
-        // Ugh, Result doesn't seem good here.
         if *method == http::method::Method::OPTIONS {
-            Err(Outcomes::Halt(http::StatusCode::OK))
+            Outcomes::Halt(http::StatusCode::OK)
         } else {
-            Ok(States::C3)
+            Outcomes::Next(StateFn(Self::c3))
         }
     }
-}
 
+    fn c3(&mut self) -> Outcomes<R, B> {
+        let accept = self.request.headers().get(http::header::ACCEPT);
 
-struct C3;
-
-impl<R, B> State<R, B> for C3 where R: Resource {
-    const LABEL: States = States::C3;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept = request.headers().get(http::header::ACCEPT);
-
-        if let Some(header) = accept {
-            Ok(States::C4)
+        let next = if accept.is_some() {
+            Self::c4
         } else {
-            Ok(States::D4)
-        }
+            Self::d4
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct C4;
+    fn c4(&mut self) -> Outcomes<R, B> {
+        let accept = self.request.headers().get(http::header::ACCEPT);
 
-impl<R, B> State<R, B> for C4 where R: Resource {
-    const LABEL: States = States::C4;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept = request.headers().get(http::header::ACCEPT);
-
-        if let Some(header) = accept {
+        if let Some(_header) = accept {
             // TODO actually choose the type
             let chosen_type = true;
 
             if chosen_type {
-                Ok(States::D4)
+                Outcomes::Next(StateFn(Self::d4))
             } else {
-                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+                Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
         } else {
             unreachable!();
         }
     }
-}
 
-struct D4;
+    fn d4(&mut self) -> Outcomes<R, B> {
+        let accept_language = self.request.headers().get(http::header::ACCEPT_LANGUAGE);
 
-impl<R, B> State<R, B> for D4 where R: Resource {
-    const LABEL: States = States::D4;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept_language = request.headers().get(http::header::ACCEPT_LANGUAGE);
-
-        if let Some(header) = accept_language {
-            Ok(States::D5)
+        let next = if accept_language.is_some() {
+            Self::d5
         } else {
-            Ok(States::E5)
-        }
+            Self::e5
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct D5;
-
-impl<R, B> State<R, B> for D5 where R: Resource {
-    const LABEL: States = States::D5;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept_language = request.headers().get(http::header::ACCEPT_LANGUAGE);
+    fn d5(&mut self) -> Outcomes<R, B> {
+        let accept_language = self.request.headers().get(http::header::ACCEPT_LANGUAGE);
 
         if let Some(header) = accept_language {
             // TODO: this algorithm is too simple
-            if resource.languages_provided().contains(&header.to_str().unwrap()) {
-                Ok(States::E5)
+            if self.resource.languages_provided().contains(&header.to_str().unwrap()) {
+                Outcomes::Next(StateFn(Self::e5))
             } else {
-                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+                Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
         } else {
             unreachable!()
         }
     }
-}
 
-struct E5;
+    fn e5(&mut self) -> Outcomes<R, B> {
+        let accept_charset = self.request.headers().get(http::header::ACCEPT_CHARSET);
 
-impl<R, B> State<R, B> for E5 where R: Resource {
-    const LABEL: States = States::D5;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept_charset = request.headers().get(http::header::ACCEPT_CHARSET);
-
-        if let Some(header) = accept_charset {
-            Ok(States::E6)
+        let next = if accept_charset.is_some() {
+            Self::e6
         } else {
-            Ok(States::F6)
-        }
+            Self::f6
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct E6;
-
-impl<R, B> State<R, B> for E6 where R: Resource {
-    const LABEL: States = States::E6;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept_charset = request.headers().get(http::header::ACCEPT_CHARSET);
+    fn e6(&mut self) -> Outcomes<R, B> {
+        let accept_charset = self.request.headers().get(http::header::ACCEPT_CHARSET);
 
         if let Some(header) = accept_charset {
             // TODO: this algorithm is too simple
-            if resource.charsets_provided().contains(&header) {
-                Ok(States::G7)
+            if self.resource.charsets_provided().contains(header) {
+                Outcomes::Next(StateFn(Self::g7))
             } else {
-                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+                Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
         } else {
             unreachable!()
         }
     }
-}
 
-struct F6;
+    fn f6(&mut self) -> Outcomes<R, B> {
+        let accept_charset = self.request.headers().get(http::header::ACCEPT_CHARSET);
 
-impl<R, B> State<R, B> for F6 where R: Resource {
-    const LABEL: States = States::F6;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept_charset = request.headers().get(http::header::ACCEPT_CHARSET);
-
-        if let Some(header) = accept_charset {
-            Ok(States::F7)
+        let next = if accept_charset.is_some() {
+            Self::f7
         } else {
-            Ok(States::G7)
-        }
+            Self::g7
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct F7;
 
-impl<R, B> State<R, B> for F7 where R: Resource {
-    const LABEL: States = States::F7;
+    fn f7(&mut self) -> Outcomes<R, B> {
+        let accept_encoding = self.request.headers().get(http::header::ACCEPT_ENCODING);
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let accept_encoding = request.headers().get(http::header::ACCEPT_ENCODING);
-
-        if let Some(header) = accept_encoding {
+        if let Some(_header) = accept_encoding {
             // TODO: this algorithm is too simple
             if true {
-                Ok(States::G7)
+                Outcomes::Next(StateFn(Self::g7))
             } else {
-                Err(Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE))
+                Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
         } else {
             unreachable!()
         }
     }
-}
 
-struct G7;
-
-impl<R, B> State<R, B> for G7 where R: Resource {
-    const LABEL: States = States::G7;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-
-        if resource.resource_exists() {
-            Ok(States::G8)
+    fn g7(&mut self) -> Outcomes<R, B> {
+        let next = if self.resource.resource_exists() {
+            Self::g8
         } else {
-            Ok(States::H7)
-        }
+            unimplemented!() //Self::h7
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct G8;
+    fn g8(&mut self) -> Outcomes<R, B> {
+        let if_match = self.request.headers().get(http::header::IF_MATCH);
 
-impl<R, B> State<R, B> for G8 where R: Resource {
-    const LABEL: States = States::G8;
+        let next = if let Some(_header) = if_match {
+            Self::g9
+        } else {
+            Self::h10
+        };
 
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
+        Outcomes::Next(StateFn(next))
+    }
 
-        let request = &mut wrapper.request;
-
-        let if_match = request.headers().get(http::header::IF_MATCH);
+    fn g9(&mut self) -> Outcomes<R, B> {
+        let if_match = self.request.headers().get(http::header::IF_MATCH);
 
         if let Some(header) = if_match {
-            Ok(States::G9)
-        } else {
-            Ok(States::H10)
-        }
-    }
-}
-
-struct G9;
-
-impl<R, B> State<R, B> for G9 where R: Resource {
-    const LABEL: States = States::G9;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let if_match = request.headers().get(http::header::IF_MATCH);
-
-        if let Some(header) = if_match {
-            if header.to_str().unwrap() == "*" {
-                Ok(States::H10)
+            let next = if header.to_str().unwrap() == "*" {
+                Self::h10
             } else {
-                Ok(States::G11)
-            }
+                Self::g11
+            };
+
+            Outcomes::Next(StateFn(next))
         } else {
             unreachable!()
         }
     }
-}
 
-struct G11;
+    fn g11(&mut self) -> Outcomes<R, B> {
+        let if_match = self.request.headers().get(http::header::IF_MATCH);
 
-impl<R, B> State<R, B> for G11 where R: Resource {
-    const LABEL: States = States::G11;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-
-        let request = &mut wrapper.request;
-
-        let if_match = request.headers().get(http::header::IF_MATCH);
-
-        if let Some(header) = if_match {
+        if let Some(_header) = if_match {
             //TODO: Implement correctly
             let etag_in_if_match = true;
             if etag_in_if_match {
-                Ok(States::H10)
+                Outcomes::Next(StateFn(Self::h10))
             } else {
-                Err(Outcomes::Halt(http::StatusCode::PRECONDITION_FAILED))
+                Outcomes::Halt(http::StatusCode::PRECONDITION_FAILED)
             }
         } else {
             unreachable!()
         }
     }
-}
 
-struct H10;
-
-impl<R, B> State<R, B> for H10 where R: Resource {
-    const LABEL: States = States::H10;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
+    fn h10(&mut self) -> Outcomes<R, B> {
         // TODO: we currently just skip through
-        Ok(States::M16)
+        Outcomes::Next(StateFn(Self::m16))
     }
-}
 
-// TODO: CONDITION HANDLING
+    // TODO: CONDITION HANDLING
 
-struct M16;
-
-impl<R, B> State<R, B> for M16 where R: Resource {
-    const LABEL: States = States::M16;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let request = &mut wrapper.request;
-
-        if http::method::Method::DELETE == *request.method() {
-            Ok(States::M20)
+    fn m16(&mut self) -> Outcomes<R, B> {
+        let next = if http::method::Method::DELETE == *self.request.method() {
+            unimplemented!() //Self::m20
         } else {
-            Ok(States::N16)
-        }
+            Self::n16
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct N16;
-
-impl<R, B> State<R, B> for N16 where R: Resource {
-    const LABEL: States = States::N16;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let request = &mut wrapper.request;
-
-        if http::method::Method::POST == *request.method() {
-            Ok(States::N11)
+    fn n16(&mut self) -> Outcomes<R, B> {
+        let next = if http::method::Method::POST == *self.request.method() {
+            unimplemented!() //Self::n11
         } else {
-            Ok(States::O16)
-        }
+            Self::o16
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-
-struct O16;
-
-impl<R, B> State<R, B> for O16 where R: Resource {
-    const LABEL: States = States::O16;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let request = &mut wrapper.request;
-
-        if http::method::Method::PUT == *request.method() {
-            Ok(States::O14)
+    fn o16(&mut self) -> Outcomes<R, B> {
+        let next = if http::method::Method::PUT == *self.request.method() {
+            unimplemented!() //Self::o14
         } else {
-            Ok(States::O18)
-        }
+            Self::o18
+        };
+
+        Outcomes::Next(StateFn(next))
     }
-}
 
-struct O18;
+    fn o18(&mut self) -> Outcomes<R, B> {
+        self.response.builder().status(200);
 
-impl<R, B> State<R, B> for O18 where R: Resource
-{
-    const LABEL: States = States::O18;
-
-    fn execute(wrapper: &mut ResponseWrapper<R,B>) -> Result<States, Outcomes<R>> {
-        let resource = &mut wrapper.resource;
-        let response = &mut wrapper.response;
-        let request = &mut wrapper.request;
-
-        response.builder().status(200);
-
-        let content_type = request.headers().get("Content-Type");
+        let content_type = self.request.headers().get("Content-Type");
 
         if let Some(ct) = content_type {
             let mime: mime::Mime = ct.to_str().unwrap().parse().unwrap();
-            let pair = resource.content_types_allowed().iter().find(|&&(ref m, handler)| *m == mime);
+            let pair = self.resource.content_types_allowed().iter().find(|&&(ref m, _)| *m == mime);
 
             if let Some(&(_, handler)) = pair {
-                println!("found handler");
-                Err(Outcomes::Handle(handler))
+                Outcomes::Handle(handler)
             } else {
                 panic!("No handler for content type.")
             }
         } else {
-            Err(Outcomes::StartResponse)
+            Outcomes::StartResponse
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
