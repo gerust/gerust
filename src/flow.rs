@@ -14,7 +14,7 @@ use std::ops::Deref;
 pub static DIAGRAM_VERSION: u8 = 3;
 
 pub enum Outcomes<R, B> where R: Resource {
-    Next(StateFn<R, B>),
+    Next(fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>),
     StartResponse,
     Handle(fn (&mut R, &mut DelayedResponse) -> ()),
     Halt(http::status::StatusCode),
@@ -80,17 +80,15 @@ impl Flow for HttpFlow
     {
         let mut wrapper = ResourceWrapper::new(resource, request);
 
-        let mut current = StateFn(ResourceWrapper::b13);
+        let mut current = Outcomes::Next(ResourceWrapper::b13);
 
         loop {
             //println!("transitioning from: {:?}", self);
 
-            let retval = current(&mut wrapper);
-
-            match retval {
+            match current {
                 Outcomes::Next(f) => {
                     //println!("transitioned into: {:?}", self);
-                    current = f;
+                    current = f(&mut wrapper);
 
                     continue;
                 },
@@ -145,20 +143,10 @@ impl<R, B> ResourceWrapper<R, B>
     }
 }
 
-pub struct StateFn<R, B>(fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>) where R: Resource;
-
-impl<R, B> Deref for StateFn<R, B> where R: Resource {
-    type Target = fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 impl<R, B> ResourceWrapper<R, B> where R: Resource {
     fn b13(&mut self) -> Outcomes<R, B> {
         if self.resource.service_available() {
-            Outcomes::Next(StateFn(Self::b12))
+            Outcomes::Next(Self::b12)
         } else {
             Outcomes::Halt(http::StatusCode::SERVICE_UNAVAILABLE)
         }
@@ -166,7 +154,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
     fn b12(&mut self) -> Outcomes<R, B> {
         if self.resource.known_methods().contains(self.request.method()) {
-            Outcomes::Next(StateFn(Self::b11))
+            Outcomes::Next(Self::b11)
         } else {
             Outcomes::Halt(http::StatusCode::NOT_IMPLEMENTED)
         }
@@ -176,7 +164,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         if self.resource.uri_too_long(self.request.uri()) {
             Outcomes::Halt(http::StatusCode::URI_TOO_LONG)
         } else {
-            Outcomes::Next(StateFn(Self::b10))
+            Outcomes::Next(Self::b10)
         }
     }
 
@@ -184,7 +172,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         let builder = self.response.builder();
 
         if self.resource.allowed_methods().contains(self.request.method()) {
-            Outcomes::Next(StateFn(Self::b9))
+            Outcomes::Next(Self::b9)
         } else {
             let header = http::header::HeaderValue::from_str(&self.resource.allowed_methods().iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")).unwrap();
 
@@ -200,7 +188,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
                 if self.resource.malformed_request() {
                     Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 } else {
-                    Outcomes::Next(StateFn(Self::b8))
+                    Outcomes::Next(Self::b8)
                 }
             } else {
                 //resource.response_mut().body("Content-MD5 header does not match request body.")
@@ -213,7 +201,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
                 if self.resource.malformed_request() {
                     Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 } else {
-                    Outcomes::Next(StateFn(Self::b8))
+                    Outcomes::Next(Self::b8)
                 }
             } else {
                 Outcomes::Halt(http::StatusCode::BAD_REQUEST)
@@ -226,7 +214,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
         // TODO: Implement full is_authorized protocol
         if self.resource.is_authorized(auth_header) {
-            Outcomes::Next(StateFn(Self::b7))
+            Outcomes::Next(Self::b7)
         } else {
             Outcomes::Halt(http::StatusCode::UNAUTHORIZED)
         }
@@ -236,7 +224,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         if self.resource.forbidden() {
             Outcomes::Halt(http::StatusCode::FORBIDDEN)
         } else {
-            Outcomes::Next(StateFn(Self::b6))
+            Outcomes::Next(Self::b6)
         }
     }
 
@@ -245,7 +233,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             .filter(|&(name, _)| name.as_str().starts_with("CONTENT-"));
 
         if self.resource.valid_content_headers(headers) {
-            Outcomes::Next(StateFn(Self::b5))
+            Outcomes::Next(Self::b5)
         } else {
             Outcomes::Halt(http::StatusCode::NOT_IMPLEMENTED)
         }
@@ -259,7 +247,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         let ct = content_type.unwrap_or(&default);
 
         if self.resource.known_content_type(ct) {
-            Outcomes::Next(StateFn(Self::b4))
+            Outcomes::Next(Self::b4)
         } else {
             Outcomes::Halt(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
         }
@@ -277,7 +265,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
                     // TODO: Communicate _why_ it is a BAD_REQUEST
                     return Outcomes::Halt(http::StatusCode::BAD_REQUEST)
                 } else {
-                    return Outcomes::Next(StateFn(Self::b3))
+                    return Outcomes::Next(Self::b3)
                 }
             },
             _ => {}
@@ -292,7 +280,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             if let Ok(stringed) = cl.to_str() {
                 if let Ok(parsed) = stringed.parse() {
                     if self.resource.valid_entity_length(parsed) {
-                        Outcomes::Next(StateFn(Self::b3))
+                        Outcomes::Next(Self::b3)
                     } else {
                         Outcomes::Halt(http::StatusCode::PAYLOAD_TOO_LARGE)
                     }
@@ -316,7 +304,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         if *method == http::method::Method::OPTIONS {
             Outcomes::Halt(http::StatusCode::OK)
         } else {
-            Outcomes::Next(StateFn(Self::c3))
+            Outcomes::Next(Self::c3)
         }
     }
 
@@ -329,7 +317,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::d4
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn c4(&mut self) -> Outcomes<R, B> {
@@ -340,7 +328,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             let chosen_type = true;
 
             if chosen_type {
-                Outcomes::Next(StateFn(Self::d4))
+                Outcomes::Next(Self::d4)
             } else {
                 Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
@@ -358,7 +346,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::e5
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn d5(&mut self) -> Outcomes<R, B> {
@@ -367,7 +355,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         if let Some(header) = accept_language {
             // TODO: this algorithm is too simple
             if self.resource.languages_provided().contains(&header.to_str().unwrap()) {
-                Outcomes::Next(StateFn(Self::e5))
+                Outcomes::Next(Self::e5)
             } else {
                 Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
@@ -385,7 +373,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::f6
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn e6(&mut self) -> Outcomes<R, B> {
@@ -394,7 +382,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         if let Some(header) = accept_charset {
             // TODO: this algorithm is too simple
             if self.resource.charsets_provided().contains(header) {
-                Outcomes::Next(StateFn(Self::g7))
+                Outcomes::Next(Self::g7)
             } else {
                 Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
@@ -412,7 +400,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::g7
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
 
@@ -422,7 +410,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         if let Some(_header) = accept_encoding {
             // TODO: this algorithm is too simple
             if true {
-                Outcomes::Next(StateFn(Self::g7))
+                Outcomes::Next(Self::g7)
             } else {
                 Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
             }
@@ -438,7 +426,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             unimplemented!() //Self::h7
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn g8(&mut self) -> Outcomes<R, B> {
@@ -450,7 +438,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::h10
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn g9(&mut self) -> Outcomes<R, B> {
@@ -463,7 +451,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
                 Self::g11
             };
 
-            Outcomes::Next(StateFn(next))
+            Outcomes::Next(next)
         } else {
             unreachable!()
         }
@@ -476,7 +464,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             //TODO: Implement correctly
             let etag_in_if_match = true;
             if etag_in_if_match {
-                Outcomes::Next(StateFn(Self::h10))
+                Outcomes::Next(Self::h10)
             } else {
                 Outcomes::Halt(http::StatusCode::PRECONDITION_FAILED)
             }
@@ -487,7 +475,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
     fn h10(&mut self) -> Outcomes<R, B> {
         // TODO: we currently just skip through
-        Outcomes::Next(StateFn(Self::m16))
+        Outcomes::Next(Self::m16)
     }
 
     // TODO: CONDITION HANDLING
@@ -499,7 +487,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::n16
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn n16(&mut self) -> Outcomes<R, B> {
@@ -509,7 +497,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::o16
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn o16(&mut self) -> Outcomes<R, B> {
@@ -519,7 +507,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
             Self::o18
         };
 
-        Outcomes::Next(StateFn(next))
+        Outcomes::Next(next)
     }
 
     fn o18(&mut self) -> Outcomes<R, B> {
