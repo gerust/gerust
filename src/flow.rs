@@ -15,7 +15,7 @@ pub static DIAGRAM_VERSION: u8 = 3;
 pub enum Outcomes<R, B> where R: Resource {
     Next(fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>),
     StartResponse,
-    Handle(fn (&mut R, &mut DelayedResponse) -> ()),
+    Handle(fn(&mut R, &mut http::Request<hyper::Body>, &mut DelayedResponse)),
     Halt(http::status::StatusCode),
 }
 
@@ -109,7 +109,7 @@ impl Flow for HttpFlow
                     wrapper.response = DelayedResponse::Started(sink);
                     sx.send(response);
                     //println!("response started: {:?}", self);
-                    handler(&mut wrapper.resource, &mut wrapper.response);
+                    handler(&mut wrapper.resource, &mut wrapper.request, &mut wrapper.response);
 
                     wrapper.response.response_body().poll_complete();
                     break;
@@ -127,7 +127,7 @@ impl Flow for HttpFlow
 pub struct ResourceWrapper<R, B>
     where R: Resource {
     resource: R,
-    request: http::Request<B>,
+    pub request: http::Request<B>,
     response: DelayedResponse
 }
 
@@ -535,30 +535,42 @@ mod tests {
     use resource::Resource;
     use mime;
     use hyper;
+    use futures::sync::oneshot;
 
     #[derive(Default, Debug)]
-    struct DefaultResource {
-        request: http::Request<hyper::Body>,
-        response: http::Response<hyper::Body>
-    }
+    struct DefaultResource;
 
     impl Resource for DefaultResource  {
-        fn content_types_allowed(&self) -> &'static [(mime::Mime, fn(&Self) -> ())] {
-            &[(mime::TEXT_HTML, default_html)]
+        fn content_types_accepted(&self) -> &'static  [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())] {
+            &[]
+        }
+
+        fn content_types_provided(&self) -> &'static [(mime::Mime, fn(&mut Self, response: &mut ::flow::DelayedResponse) -> ())] {
+            &[(mime::TEXT_HTML, Self::to_html)]
         }
     }
 
-    fn default_html(resource: &DefaultResource) -> () {
+    impl DefaultResource {
+        fn to_html(&mut self, response: &mut ::flow::DelayedResponse) -> () {
 
+        }
     }
+
 
     #[test]
     fn default() {
         let resource = DefaultResource::default();
 
-        let flow = Flow::new();
+        let mut flow = HttpFlow::new();
 
-        flow.execute();
+        let req = http::request::Builder::new()
+            .method(http::method::Method::GET)
+            .body("".into())
+            .unwrap();
+
+        let (sx, rx): (_, _) = oneshot::channel::<http::Response<hyper::Body>>();
+
+        flow.execute(resource, req, sx);
     }
 }
 

@@ -1,8 +1,9 @@
 use std;
 use http;
 use mime;
+use hyper;
 
-pub trait Resource where Self: 'static {
+pub trait Resource where Self: Sized + 'static {
     fn resource_exists(&self) -> bool {
         true
     }
@@ -85,7 +86,7 @@ pub trait Resource where Self: 'static {
     fn content_types_provided(&self) -> &'static [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())];
 
     ///TODO: create handler interface
-    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())] {
+    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<hyper::Body>, response: &mut ::flow::DelayedResponse) -> ())] {
         &[]
     }
 

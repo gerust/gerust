@@ -48,7 +48,8 @@ impl<'a, R> hyper::server::Service for GerustService<'a, R>
 
         // TODO: don't unwrap the response builder result here
         Box::from(rx.or_else(|_| Ok(http::response::Builder::new()
-            .status(501).body(b"<h1>Internal Server Error</h1>".as_ref().into()).unwrap())))
+            .status(501).header(http::header::CONTENT_TYPE, "text/html")
+            .body(b"<body><head></head><h1>Internal Server Error</h1></body>".as_ref().into()).unwrap())))
     }
 }
 
