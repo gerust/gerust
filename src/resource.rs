@@ -70,15 +70,16 @@ pub trait Resource where Self: Sized + 'static {
         false
     }
 
-    fn create_path(&self) {
-
+    // TODO: find proper protocol for this.
+    fn create_path(&self) -> String {
+        format!("")
     }
 
     fn base_uri(&self) -> Option<http::uri::Uri> {
         None
     }
 
-    fn process_post(&self) -> bool {
+    fn process_post(&self, response: &mut ::flow::DelayedResponse) -> bool {
         false
     }
 

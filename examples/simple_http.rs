@@ -17,7 +17,9 @@ use futures::Stream;
 use futures::Future;
 
 #[derive(Debug, Default)]
-struct OrderResource;
+struct OrderResource {
+    order: Option<Order>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Order {
@@ -26,6 +28,12 @@ struct Order {
 }
 
 impl Resource for OrderResource {
+    fn post_is_create(&self) -> bool { true }
+
+    fn create_path(&self) -> String {
+        format!("orders/{}", self.order.as_ref().unwrap().id )
+    }
+
     fn allowed_methods(&self) -> &'static [http::Method] {
         use http::method::Method;
 
@@ -39,6 +47,12 @@ impl Resource for OrderResource {
     fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) -> ())] {
         &[(mime::APPLICATION_JSON, OrderResource::from_json)]
     }
+
+    fn process_post(&self, response: &mut gerust::flow::DelayedResponse) -> bool {
+        println!("received order: {:?}", self.order);
+
+        true
+    }
 }
 
 impl OrderResource {
@@ -49,13 +63,13 @@ impl OrderResource {
     }
 
     fn from_json(&mut self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) {
-        request.body_mut().concat2()
-            .and_then(|body| {
-                let order = serde_json::from_slice::<Order>(&body);
-                println!("received order: {:?}", order);
-
-                Ok(())
+        // TODO: that sounds like we want a helper function here
+        let order = request.body_mut().concat2()
+            .then(|body| {
+                serde_json::from_slice::<Order>(&body.unwrap())
             }).wait();
+
+        self.order = Some(order.unwrap());
     }
 }
 

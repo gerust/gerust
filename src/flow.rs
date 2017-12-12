@@ -14,10 +14,14 @@ use std::fmt::Debug;
 
 pub static DIAGRAM_VERSION: u8 = 3;
 
-pub enum Outcomes<R, B> where R: Resource {
-    Next(fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>),
-    StartResponse,
-    Handle(fn(&mut R, &mut http::Request<hyper::Body>, &mut DelayedResponse)),
+type StateFn<R, B> = fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>;
+
+pub enum Outcomes<R, B: 'static> where R: Resource {
+    Next(StateFn<R, B>),
+    StartResponse(StateFn<R, B>),
+    Done,
+    InputHandler(fn(&mut R, &mut http::Request<hyper::Body>, &mut DelayedResponse)),
+    OutputHandler(fn(&mut R, &mut DelayedResponse)),
     Halt(http::status::StatusCode),
 }
 
@@ -79,6 +83,8 @@ impl Flow for HttpFlow
     fn execute<R>(&mut self, resource: R, request: Self::Request, sx: Sender<Self::Response>)
         where R: Resource + Debug
     {
+        let mut sender = Some(sx);
+
         let mut wrapper = ResourceWrapper::new(resource, request);
 
         let mut current = Outcomes::Next(ResourceWrapper::b13);
@@ -90,38 +96,67 @@ impl Flow for HttpFlow
                 Outcomes::Next(f) => {
                     backtrace::resolve(f as *mut std::os::raw::c_void, |symbol| {
                         println!("transitioned into: {:?}", symbol);
-
                     });
                     current = f(&mut wrapper);
                     continue;
                 },
-                Outcomes::StartResponse => {
+                Outcomes::StartResponse(f) => {
+                    backtrace::resolve(f as *mut std::os::raw::c_void, |symbol| {
+                        println!("transitioned into: {:?}", symbol);
+                    });
                     //println!("received StartResponse!");
 
                     let (sink, body) = hyper::Body::pair();
                     // TODO: Fail properly
                     let response = wrapper.response.builder().body(body).unwrap();
                     wrapper.response = DelayedResponse::Started(sink);
-                    sx.send(response);
+                    // TODO: Fail properly
+                    sender.take().unwrap().send(response);
                     //println!("response started: {:?}", self);
+                    current = f(&mut wrapper);
+                },
+                Outcomes::Done => {
+                    //println!("received StartResponse!");
+
+                    // TODO: Fail properly
+                    let response = wrapper.response.builder().body("".into()).unwrap();
+
+                    // TODO: Fail properly
+                    sender.take().unwrap().send(response);
                     break;
                 },
-                Outcomes::Handle(handler) => {
+                Outcomes::InputHandler(handler) => {
                     //println!("handling!");
                     let (sink, body) = hyper::Body::pair();
                     // TODO: Fail properly
                     let response = wrapper.response.builder().body(body).unwrap();
                     wrapper.response = DelayedResponse::Started(sink);
-                    sx.send(response);
+                    // TODO: Fail properly
+                    sender.take().unwrap().send(response);
                     //println!("response started: {:?}", self);
                     handler(&mut wrapper.resource, &mut wrapper.request, &mut wrapper.response);
 
                     wrapper.response.response_body().poll_complete();
                     break;
                 },
+                Outcomes::OutputHandler(handler) => {
+                    //println!("handling!");
+                    let (sink, body) = hyper::Body::pair();
+                    // TODO: Fail properly
+                    let response = wrapper.response.builder().body(body).unwrap();
+                    wrapper.response = DelayedResponse::Started(sink);
+                    // TODO: Fail properly
+                    sender.take().unwrap().send(response);
+                    //println!("response started: {:?}", self);
+                    handler(&mut wrapper.resource, &mut wrapper.response);
+
+                    wrapper.response.response_body().poll_complete();
+                    break;
+                },
                 Outcomes::Halt(s) => {
                     let response: http::Response<hyper::Body> = wrapper.response.builder().status(s).body(s.canonical_reason().unwrap().into()).unwrap();
-                    sx.send(response);
+                    // TODO: Fail properly
+                    sender.take().unwrap().send(response);
                     break;
                 }
             };
@@ -129,7 +164,7 @@ impl Flow for HttpFlow
     }
 }
 
-pub struct ResourceWrapper<R, B>
+pub struct ResourceWrapper<R, B: 'static>
     where R: Resource {
     resource: R,
     pub request: http::Request<B>,
@@ -492,9 +527,51 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
         Outcomes::Next(next)
     }
-
+//    base_uri = resource.base_uri || request.base_uri
+//    new_uri = URI.join(base_uri.to_s, uri)
+//    request.disp_path = new_uri.path
+//    response.headers[LOCATION] = new_uri.to_s
+//    result = accept_helper
     fn n11(&mut self) -> Outcomes<R, B> {
+        if self.resource.post_is_create() {
+            let mime: mime::Mime = {
+                let content_type = self.request.headers().get("Content-Type");
+                if let Some(ct) = content_type {
+                    ct.to_str().unwrap().parse().unwrap()
+                } else {
+                    unimplemented!()
+                }
+            };
 
+            let pair = self.resource.content_types_accepted().iter().find(|&&(ref m, _)| *m == mime);
+
+            if let Some(&(_, handler)) = pair {
+                // TODO remove this very nasty hack
+                let any = &mut self.request as &mut std::any::Any;
+
+                let request = any.downcast_mut::<http::Request<hyper::Body>>().unwrap();
+
+                handler(&mut self.resource, request, &mut self.response);
+
+                if self.resource.process_post(&mut self.response) {
+                    self.response.builder()
+                        .status(http::status::StatusCode::CREATED)
+                        .header(http::header::LOCATION, &*self.resource.create_path());
+
+                    Outcomes::Done
+                } else {
+                    unimplemented!(); //Outcomes::Next(Self::o20)
+                }
+            } else {
+                unimplemented!();
+            }
+        } else {
+            if self.resource.process_post(&mut self.response) {
+                Outcomes::Halt(http::status::StatusCode::CREATED)
+            } else {
+                unimplemented!(); //Outcomes::Next(Self::o20)
+            }
+        }
     }
 
     fn n16(&mut self) -> Outcomes<R, B> {
@@ -520,19 +597,20 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
     fn o18(&mut self) -> Outcomes<R, B> {
         self.response.builder().status(200);
 
+        // TODO incorrect, this must be the deduced accepted content-type
         let content_type = self.request.headers().get("Content-Type");
 
         if let Some(ct) = content_type {
             let mime: mime::Mime = ct.to_str().unwrap().parse().unwrap();
-            let pair = self.resource.content_types_accepted().iter().find(|&&(ref m, _)| *m == mime);
+            let pair = self.resource.content_types_provided().iter().find(|&&(ref m, _)| *m == mime);
 
             if let Some(&(_, handler)) = pair {
-                Outcomes::Handle(handler)
+                Outcomes::OutputHandler(handler)
             } else {
                 panic!("No handler for content type.")
             }
         } else {
-            Outcomes::StartResponse
+            unimplemented!();
         }
     }
 }
