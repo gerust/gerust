@@ -1,6 +1,8 @@
 use http;
 use hyper;
 use mime;
+use backtrace;
+use std;
 use futures;
 use futures::Sink;
 use futures::Future;
@@ -86,7 +88,10 @@ impl Flow for HttpFlow
 
             match current {
                 Outcomes::Next(f) => {
-                    //println!("transitioned into: {:?}", self);
+                    backtrace::resolve(f as *mut std::os::raw::c_void, |symbol| {
+                        println!("transitioned into: {:?}", symbol);
+
+                    });
                     current = f(&mut wrapper);
                     continue;
                 },
@@ -488,9 +493,13 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
+    fn n11(&mut self) -> Outcomes<R, B> {
+
+    }
+
     fn n16(&mut self) -> Outcomes<R, B> {
         let next = if http::method::Method::POST == *self.request.method() {
-            unimplemented!() //Self::n11
+            Self::n11
         } else {
             Self::o16
         };
