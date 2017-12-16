@@ -10,7 +10,6 @@ extern crate backtrace;
 extern crate regex;
 #[macro_use]
 extern crate lazy_static;
-extern crate noisy_float;
 
 pub mod resource;
 pub mod flow;
