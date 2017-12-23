@@ -7,6 +7,7 @@ use futures;
 use futures::Sink;
 use futures::Future;
 use futures::sync::oneshot::Sender;
+use ::Body;
 
 use resource::Resource;
 
@@ -20,7 +21,7 @@ pub enum Outcomes<R, B: 'static> where R: Resource {
     Next(StateFn<R, B>),
     StartResponse(StateFn<R, B>),
     Done,
-    InputHandler(fn(&mut R, &mut http::Request<hyper::Body>, &mut DelayedResponse)),
+    InputHandler(fn(&mut R, &mut http::Request<Body>, &mut DelayedResponse)),
     OutputHandler(fn(&mut R, &mut DelayedResponse)),
     Halt(http::status::StatusCode),
 }
@@ -71,8 +72,8 @@ pub struct FlowError;
 
 impl Flow for HttpFlow
 {
-    type Request = http::Request<hyper::Body>;
-    type Response = http::Response<hyper::Body>;
+    type Request = http::Request<Body>;
+    type Response = http::Response<Body>;
     type Error = FlowError;
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
@@ -106,7 +107,7 @@ impl Flow for HttpFlow
                     });
                     //println!("received StartResponse!");
 
-                    let (sink, body) = hyper::Body::pair();
+                    let (sink, body) = Body::pair();
                     // TODO: Fail properly
                     let response = wrapper.response.builder().body(body).unwrap();
                     wrapper.response = DelayedResponse::Started(sink);
@@ -127,7 +128,7 @@ impl Flow for HttpFlow
                 },
                 outcome @ Outcomes::InputHandler(_) | outcome @ Outcomes::OutputHandler(_) => {
                     //println!("handling!");
-                    let (sink, body) = hyper::Body::pair();
+                    let (sink, body) = Body::pair();
                     // TODO: Fail properly
                     let response = wrapper.response.builder().body(body).unwrap();
                     wrapper.response = DelayedResponse::Started(sink);
@@ -148,7 +149,7 @@ impl Flow for HttpFlow
                     break;
                 },
                 Outcomes::Halt(s) => {
-                    let response: http::Response<hyper::Body> = wrapper.response.builder().status(s).body(s.canonical_reason().unwrap().into()).unwrap();
+                    let response: http::Response<Body> = wrapper.response.builder().status(s).body(s.canonical_reason().unwrap().into()).unwrap();
                     // TODO: Fail properly
                     sender.take().unwrap().send(response);
                     break;
@@ -544,7 +545,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
                 // TODO remove this very nasty hack
                 let any = &mut self.request as &mut std::any::Any;
 
-                let request = any.downcast_mut::<http::Request<hyper::Body>>().unwrap();
+                let request = any.downcast_mut::<http::Request<Body>>().unwrap();
 
                 handler(&mut self.resource, request, &mut self.response);
 
@@ -650,7 +651,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 //            .body("".into())
 //            .unwrap();
 //
-//        let (sx, rx): (_, _) = oneshot::channel::<http::Response<hyper::Body>>();
+//        let (sx, rx): (_, _) = oneshot::channel::<http::Response<Body>>();
 //
 //        flow.execute(resource, req, sx);
 //    }

@@ -3,7 +3,6 @@ use mime;
 use http;
 use regex::Regex;
 
-use noisy_float::prelude::*;
 use std::cmp::Ordering;
 
 #[derive(Debug, PartialEq)]
@@ -30,11 +29,6 @@ impl From<std::num::ParseFloatError> for Error {
     }
 }
 
-// text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
-
-
-// TODO: better error type
-// TODO: actually choose from provided
 fn choose_mediatype<'a>(provided: &'a [mime::Mime], header: &http::header::HeaderValue) -> Result<&'a mime::Mime, Error> {
     lazy_static! {
         static ref CONNEG: Regex = Regex::new(r"^\s*([^;]+)(?:;\s*q=(\S*))?\s*$").unwrap();
@@ -166,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn accept_headers_pritiory_rules() {
+    fn accept_headers_priority_rules() {
         let header = http::header::HeaderValue::from_static("text/html,text/*,*/*");
         let provided = &[mime::TEXT_PLAIN];
 
