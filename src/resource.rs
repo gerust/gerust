@@ -1,7 +1,6 @@
 use std;
 use http;
 use mime;
-use hyper;
 use ::Body;
 
 pub struct ProvidedPair<R: Resource>(
@@ -168,5 +167,5 @@ pub trait Resource where Self: Sized + 'static {
 pub trait Handles {
     type Item;
 
-    fn handle(&mut self, item: Self::Item, request: &mut http::Request<hyper::Body>, response: &mut ::flow::DelayedResponse);
+    fn handle(&mut self, item: Self::Item, request: &mut http::Request<Body>, response: &mut ::flow::DelayedResponse);
 }

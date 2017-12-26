@@ -15,11 +15,11 @@ use std::fmt::Debug;
 
 pub static DIAGRAM_VERSION: u8 = 3;
 
-type StateFn<R, B> = fn(&mut ResourceWrapper<R,B>) -> Outcomes<R, B>;
+type StateFn<R> = fn(&mut ResourceWrapper<R>) -> Outcomes<R>;
 
-pub enum Outcomes<R, B: 'static> where R: Resource {
-    Next(StateFn<R, B>),
-    StartResponse(StateFn<R, B>),
+pub enum Outcomes<R> where R: Resource {
+    Next(StateFn<R>),
+    StartResponse(StateFn<R>),
     Done,
     InputHandler(fn(&mut R, &mut http::Request<Body>, &mut DelayedResponse)),
     OutputHandler(fn(&mut R, &mut DelayedResponse)),
@@ -163,19 +163,19 @@ pub struct Metadata {
     content_type: Option<mime::Mime>,
 }
 
-pub struct ResourceWrapper<R, B: 'static>
+pub struct ResourceWrapper<R>
     where R: Resource {
     accepted_type: Option<mime::Mime>,
     resource: R,
-    pub request: http::Request<B>,
+    pub request: http::Request<Body>,
     response: DelayedResponse,
     metadata: Metadata
 }
 
-impl<R, B> ResourceWrapper<R, B>
+impl<R> ResourceWrapper<R>
     where R: Resource
 {
-    fn new(resource: R, request: http::Request<B>) -> Self {
+    fn new(resource: R, request: http::Request<Body>) -> Self {
         let delay = DelayedResponse::new();
         let metadata = Metadata { content_type: None };
 
@@ -183,8 +183,8 @@ impl<R, B> ResourceWrapper<R, B>
     }
 }
 
-impl<R, B> ResourceWrapper<R, B> where R: Resource {
-    fn b13(&mut self) -> Outcomes<R, B> {
+impl<R> ResourceWrapper<R> where R: Resource {
+    fn b13(&mut self) -> Outcomes<R> {
         if self.resource.service_available() {
             Outcomes::Next(Self::b12)
         } else {
@@ -192,7 +192,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b12(&mut self) -> Outcomes<R, B> {
+    fn b12(&mut self) -> Outcomes<R> {
         if self.resource.known_methods().contains(self.request.method()) {
             Outcomes::Next(Self::b11)
         } else {
@@ -200,7 +200,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b11(&mut self) -> Outcomes<R, B> {
+    fn b11(&mut self) -> Outcomes<R> {
         if self.resource.uri_too_long(self.request.uri()) {
             Outcomes::Halt(http::StatusCode::URI_TOO_LONG)
         } else {
@@ -208,7 +208,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b10(&mut self) -> Outcomes<R, B> {
+    fn b10(&mut self) -> Outcomes<R> {
         let builder = self.response.builder();
 
         if self.resource.allowed_methods().contains(self.request.method()) {
@@ -222,7 +222,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b9(&mut self) -> Outcomes<R, B> {
+    fn b9(&mut self) -> Outcomes<R> {
         if let Some(result) = self.resource.validate_content_checksum() {
             if result {
                 if self.resource.malformed_request() {
@@ -249,7 +249,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b8(&mut self) -> Outcomes<R, B> {
+    fn b8(&mut self) -> Outcomes<R> {
         let auth_header = self.request.headers().get(http::header::AUTHORIZATION);
 
         // TODO: Implement full is_authorized protocol
@@ -260,7 +260,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b7(&mut self) -> Outcomes<R, B> {
+    fn b7(&mut self) -> Outcomes<R> {
         if self.resource.forbidden() {
             Outcomes::Halt(http::StatusCode::FORBIDDEN)
         } else {
@@ -268,7 +268,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b6(&mut self) -> Outcomes<R, B> {
+    fn b6(&mut self) -> Outcomes<R> {
         let headers = self.request.headers().iter()
             .filter(|&(name, _)| name.as_str().starts_with("CONTENT-"));
 
@@ -279,7 +279,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b5(&mut self) -> Outcomes<R, B> {
+    fn b5(&mut self) -> Outcomes<R> {
         let content_type = self.request.headers().get("Content-Type");
 
         // Default Content-Type is application/octet-stream. https://www.w3.org/Protocols/rfc2616/rfc2616-sec7.html#sec7.2.1
@@ -293,7 +293,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b4(&mut self) -> Outcomes<R, B> {
+    fn b4(&mut self) -> Outcomes<R> {
         use http::method::Method;
 
         let content_length = self.request.headers().get("Content-Length");
@@ -338,7 +338,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn b3(&mut self) -> Outcomes<R, B> {
+    fn b3(&mut self) -> Outcomes<R> {
         let method = self.request.method();
 
         if *method == http::method::Method::OPTIONS {
@@ -348,7 +348,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn c3(&mut self) -> Outcomes<R, B> {
+    fn c3(&mut self) -> Outcomes<R> {
         let accept = self.request.headers().get(http::header::ACCEPT);
 
         let next = if accept.is_some() {
@@ -360,7 +360,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn c4(&mut self) -> Outcomes<R, B> {
+    fn c4(&mut self) -> Outcomes<R> {
         let accept = self.request.headers().get(http::header::ACCEPT);
 
         if let Some(header) = accept {
@@ -381,7 +381,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn d4(&mut self) -> Outcomes<R, B> {
+    fn d4(&mut self) -> Outcomes<R> {
         let accept_language = self.request.headers().get(http::header::ACCEPT_LANGUAGE);
 
         let next = if accept_language.is_some() {
@@ -393,7 +393,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn d5(&mut self) -> Outcomes<R, B> {
+    fn d5(&mut self) -> Outcomes<R> {
         let accept_language = self.request.headers().get(http::header::ACCEPT_LANGUAGE);
 
         if let Some(header) = accept_language {
@@ -408,7 +408,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn e5(&mut self) -> Outcomes<R, B> {
+    fn e5(&mut self) -> Outcomes<R> {
         let accept_charset = self.request.headers().get(http::header::ACCEPT_CHARSET);
 
         let next = if accept_charset.is_some() {
@@ -420,7 +420,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn e6(&mut self) -> Outcomes<R, B> {
+    fn e6(&mut self) -> Outcomes<R> {
         let accept_charset = self.request.headers().get(http::header::ACCEPT_CHARSET);
 
         if let Some(header) = accept_charset {
@@ -435,7 +435,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn f6(&mut self) -> Outcomes<R, B> {
+    fn f6(&mut self) -> Outcomes<R> {
         let accept_charset = self.request.headers().get(http::header::ACCEPT_CHARSET);
 
         let next = if accept_charset.is_some() {
@@ -448,7 +448,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
     }
 
 
-    fn f7(&mut self) -> Outcomes<R, B> {
+    fn f7(&mut self) -> Outcomes<R> {
         let accept_encoding = self.request.headers().get(http::header::ACCEPT_ENCODING);
 
         if let Some(_header) = accept_encoding {
@@ -463,7 +463,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn g7(&mut self) -> Outcomes<R, B> {
+    fn g7(&mut self) -> Outcomes<R> {
         let next = if self.resource.resource_exists() {
             Self::g8
         } else {
@@ -473,7 +473,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn g8(&mut self) -> Outcomes<R, B> {
+    fn g8(&mut self) -> Outcomes<R> {
         let if_match = self.request.headers().get(http::header::IF_MATCH);
 
         let next = if let Some(_header) = if_match {
@@ -485,7 +485,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn g9(&mut self) -> Outcomes<R, B> {
+    fn g9(&mut self) -> Outcomes<R> {
         let if_match = self.request.headers().get(http::header::IF_MATCH);
 
         if let Some(header) = if_match {
@@ -501,7 +501,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn g11(&mut self) -> Outcomes<R, B> {
+    fn g11(&mut self) -> Outcomes<R> {
         let if_match = self.request.headers().get(http::header::IF_MATCH);
 
         if let Some(_header) = if_match {
@@ -517,14 +517,14 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn h10(&mut self) -> Outcomes<R, B> {
+    fn h10(&mut self) -> Outcomes<R> {
         // TODO: we currently just skip through
         Outcomes::Next(Self::m16)
     }
 
     // TODO: CONDITION HANDLING
 
-    fn m16(&mut self) -> Outcomes<R, B> {
+    fn m16(&mut self) -> Outcomes<R> {
         let next = if http::method::Method::DELETE == *self.request.method() {
             unimplemented!() //Self::m20
         } else {
@@ -538,13 +538,14 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 //    request.disp_path = new_uri.path
 //    response.headers[LOCATION] = new_uri.to_s
 //    result = accept_helper
-    fn n11(&mut self) -> Outcomes<R, B> {
+    fn n11(&mut self) -> Outcomes<R> {
         if self.resource.post_is_create() {
             let mime: mime::Mime = {
                 let content_type = self.request.headers().get("Content-Type");
                 if let Some(ct) = content_type {
                     ct.to_str().unwrap().parse().unwrap()
                 } else {
+                    // TODO handle parse errors correctly
                     unimplemented!()
                 }
             };
@@ -553,11 +554,11 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
             if let Some(&(_, handler)) = pair {
                 // TODO remove this very nasty hack
-                let any = &mut self.request as &mut std::any::Any;
+                //let any = &mut self.request as &mut std::any::Any;
 
-                let request = any.downcast_mut::<http::Request<Body>>().unwrap();
+                //let request = any.downcast_mut::<http::Request<Body>>().unwrap();
 
-                handler(&mut self.resource, request, &mut self.response);
+                handler(&mut self.resource, &mut self.request, &mut self.response);
 
                 if self.resource.process_post(&mut self.response) {
                     self.response.builder()
@@ -580,7 +581,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         }
     }
 
-    fn n16(&mut self) -> Outcomes<R, B> {
+    fn n16(&mut self) -> Outcomes<R> {
         let next = if http::method::Method::POST == *self.request.method() {
             Self::n11
         } else {
@@ -590,7 +591,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn o16(&mut self) -> Outcomes<R, B> {
+    fn o16(&mut self) -> Outcomes<R> {
         let next = if http::method::Method::PUT == *self.request.method() {
             unimplemented!() //Self::o14
         } else {
@@ -600,7 +601,7 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
         Outcomes::Next(next)
     }
 
-    fn o18(&mut self) -> Outcomes<R, B> {
+    fn o18(&mut self) -> Outcomes<R> {
         self.response.builder().status(200);
 
         // TODO incorrect, this must be the deduced accepted content-type

@@ -46,12 +46,6 @@ impl Resource for OrderResource {
     fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) -> ())] {
         &[(mime::APPLICATION_JSON, OrderResource::from_json)]
     }
-
-    fn process_post(&self, response: &mut gerust::flow::DelayedResponse) -> bool {
-        //println!("received order: {:?}", self.order);
-
-        true
-    }
 }
 
 impl Handles for OrderResource {
