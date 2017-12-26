@@ -153,3 +153,9 @@ pub trait Resource where Self: Sized + 'static {
         None
     }
 }
+
+pub trait Handles {
+    type Item;
+
+    fn handle(&mut self, item: Self::Item, request: &mut http::Request<hyper::Body>, response: &mut ::flow::DelayedResponse);
+}
