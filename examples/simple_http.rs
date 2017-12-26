@@ -10,9 +10,8 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-use gerust::resource::{Resource, Handles};
+use gerust::resource::{Resource, ProvidedPair, Handles};
 
-use futures::sink::Sink;
 use futures::Stream;
 use futures::Future;
 
@@ -40,8 +39,8 @@ impl Resource for OrderResource {
         &[Method::GET, Method::HEAD, Method::PUT, Method::POST]
     }
 
-    fn content_types_provided(&self) -> &'static [(mime::Mime, fn(&mut OrderResource, &mut gerust::flow::DelayedResponse))] {
-        &[(mime::TEXT_HTML, OrderResource::to_html)]
+    fn content_types_provided(&self) -> &'static [ProvidedPair<Self>] {
+        &[ProvidedPair(mime::TEXT_HTML, OrderResource::to_html)]
     }
 
     fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) -> ())] {

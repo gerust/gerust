@@ -4,6 +4,17 @@ use mime;
 use hyper;
 use ::Body;
 
+pub struct ProvidedPair<R: Resource>(
+    pub mime::Mime,
+    pub fn (&mut R, response: &mut ::flow::DelayedResponse) -> ()
+);
+
+impl<R: Resource> std::convert::AsRef<mime::Mime> for ProvidedPair<R> {
+    fn as_ref(&self) -> &mime::Mime {
+        &(self.0)
+    }
+}
+
 pub trait Resource where Self: Sized + 'static {
     fn resource_exists(&self) -> bool {
         true
@@ -85,7 +96,7 @@ pub trait Resource where Self: Sized + 'static {
     }
 
     ///TODO: create handler interface
-    fn content_types_provided(&self) -> &'static [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())];
+    fn content_types_provided(&self) -> &'static [ProvidedPair<Self>];
 
     ///TODO: create handler interface
     fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<Body>, response: &mut ::flow::DelayedResponse) -> ())] {

@@ -159,12 +159,17 @@ impl Flow for HttpFlow
     }
 }
 
+pub struct Metadata {
+    content_type: Option<mime::Mime>,
+}
+
 pub struct ResourceWrapper<R, B: 'static>
     where R: Resource {
     accepted_type: Option<mime::Mime>,
     resource: R,
     pub request: http::Request<B>,
-    response: DelayedResponse
+    response: DelayedResponse,
+    metadata: Metadata
 }
 
 impl<R, B> ResourceWrapper<R, B>
@@ -172,8 +177,9 @@ impl<R, B> ResourceWrapper<R, B>
 {
     fn new(resource: R, request: http::Request<B>) -> Self {
         let delay = DelayedResponse::new();
+        let metadata = Metadata { content_type: None };
 
-        ResourceWrapper { resource: resource, request: request, response: delay, accepted_type: None }
+        ResourceWrapper { resource: resource, request: request, response: delay, accepted_type: None, metadata: metadata }
     }
 }
 
@@ -357,14 +363,18 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
     fn c4(&mut self) -> Outcomes<R, B> {
         let accept = self.request.headers().get(http::header::ACCEPT);
 
-        if let Some(_header) = accept {
-            // TODO actually choose the type
-            let chosen_type = true;
+        if let Some(header) = accept {
+            let chosen_type = ::conneg::choose_mediatype(self.resource.content_types_provided(), header);
 
-            if chosen_type {
-                Outcomes::Next(Self::d4)
-            } else {
-                Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE)
+            match chosen_type {
+                Ok(mime) => {
+                    self.metadata.content_type = Some(mime.clone());
+
+                    Outcomes::Next(Self::d4)
+                },
+                Err(::conneg::Error::NotProvided) => Outcomes::Halt(http::StatusCode::NOT_ACCEPTABLE),
+                // TODO: Communicate _why_ it is a BAD_REQUEST
+                Err(::conneg::Error::ParseError) => Outcomes::Halt(http::StatusCode::BAD_REQUEST),
             }
         } else {
             unreachable!();
@@ -598,9 +608,9 @@ impl<R, B> ResourceWrapper<R, B> where R: Resource {
 
         if let Some(ct) = content_type {
             let mime: mime::Mime = ct.to_str().unwrap().parse().unwrap();
-            let pair = self.resource.content_types_provided().iter().find(|&&(ref m, _)| *m == mime);
+            let pair = self.resource.content_types_provided().iter().find(|&&::resource::ProvidedPair(ref m, _)| *m == mime);
 
-            if let Some(&(_, handler)) = pair {
+            if let Some(&::resource::ProvidedPair(_, handler)) = pair {
                 Outcomes::OutputHandler(handler)
             } else {
                 panic!("No handler for content type.")

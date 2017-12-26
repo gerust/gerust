@@ -6,7 +6,7 @@ use regex::Regex;
 use std::cmp::Ordering;
 
 #[derive(Debug, PartialEq)]
-enum Error {
+pub enum Error {
     ParseError,
     NotProvided
 }
@@ -29,7 +29,7 @@ impl From<std::num::ParseFloatError> for Error {
     }
 }
 
-fn choose_mediatype<'a>(provided: &'a [mime::Mime], header: &http::header::HeaderValue) -> Result<&'a mime::Mime, Error> {
+pub fn choose_mediatype<'a, M: AsRef<mime::Mime>>(provided: &'a [M], header: &http::header::HeaderValue) -> Result<&'a mime::Mime, Error> {
     lazy_static! {
         static ref CONNEG: Regex = Regex::new(r"^\s*([^;]+)(?:;\s*q=(\S*))?\s*$").unwrap();
     }
@@ -105,8 +105,10 @@ fn choose_mediatype<'a>(provided: &'a [mime::Mime], header: &http::header::Heade
     }
 }
 
-fn mime_type_provided<'a>(mime_type: &mime::Mime, provided: &'a [mime::Mime]) -> Option<(&'a mime::Mime, u8)> {
-    for provided in provided {
+fn mime_type_provided<'a, M: AsRef<mime::Mime>>(mime_type: &mime::Mime, provided_mime_types: &'a [M]) -> Option<(&'a mime::Mime, u8)> {
+    for provided_ref in provided_mime_types {
+        let provided = provided_ref.as_ref();
+
         if mime_type.type_() == provided.type_() {
             if mime_type.subtype() == provided.subtype() {
                 return Some((provided, 0))
