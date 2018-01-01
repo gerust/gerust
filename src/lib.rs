@@ -20,7 +20,7 @@ pub mod body;
 pub mod chunk;
 pub mod error;
 
-type Body = hyper::Body;
+pub type Body = hyper::Body;
 
 impl body::Body for hyper::Body {
     type Chunk = hyper::Chunk;

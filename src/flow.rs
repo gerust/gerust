@@ -621,50 +621,5 @@ impl<R> ResourceWrapper<R> where R: Resource {
         }
     }
 }
-//
-//#[cfg(test)]
-//mod tests {
-//    use super::*;
-//    use http;
-//    use resource::Resource;
-//    use mime;
-//    use hyper;
-//    use futures::sync::oneshot;
-//
-//    #[derive(Default, Debug)]
-//    struct DefaultResource;
-//
-//    impl Resource for DefaultResource  {
-//        fn content_types_accepted(&self) -> &'static  [(mime::Mime, fn (&mut Self, response: &mut ::flow::DelayedResponse) -> ())] {
-//            &[]
-//        }
-//
-//        fn content_types_provided(&self) -> &'static [(mime::Mime, fn(&mut Self, response: &mut ::flow::DelayedResponse) -> ())] {
-//            &[(mime::TEXT_HTML, Self::to_html)]
-//        }
-//    }
-//
-//    impl DefaultResource {
-//        fn to_html(&mut self, response: &mut ::flow::DelayedResponse) -> () {
-//
-//        }
-//    }
-//
-//
-//    #[test]
-//    fn default() {
-//        let resource = DefaultResource::default();
-//
-//        let mut flow = HttpFlow::new();
-//
-//        let req = http::request::Builder::new()
-//            .method(http::method::Method::GET)
-//            .body("".into())
-//            .unwrap();
-//
-//        let (sx, rx): (_, _) = oneshot::channel::<http::Response<Body>>();
-//
-//        flow.execute(resource, req, sx);
-//    }
-//}
+
 

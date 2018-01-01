@@ -3,6 +3,8 @@ use mime;
 use http;
 use regex::Regex;
 
+use std::borrow::Borrow;
+
 use std::cmp::Ordering;
 
 #[derive(Debug, PartialEq)]
@@ -29,7 +31,7 @@ impl From<std::num::ParseFloatError> for Error {
     }
 }
 
-pub fn choose_mediatype<'a, M: AsRef<mime::Mime>>(provided: &'a [M], header: &http::header::HeaderValue) -> Result<&'a mime::Mime, Error> {
+pub fn choose_mediatype<'a, M: Borrow<mime::Mime>>(provided: &'a [M], header: &http::header::HeaderValue) -> Result<&'a mime::Mime, Error> {
     lazy_static! {
         static ref CONNEG: Regex = Regex::new(r"^\s*([^;]+)(?:;\s*q=(\S*))?\s*$").unwrap();
     }
@@ -105,9 +107,9 @@ pub fn choose_mediatype<'a, M: AsRef<mime::Mime>>(provided: &'a [M], header: &ht
     }
 }
 
-fn mime_type_provided<'a, M: AsRef<mime::Mime>>(mime_type: &mime::Mime, provided_mime_types: &'a [M]) -> Option<(&'a mime::Mime, u8)> {
+fn mime_type_provided<'a, M: Borrow<mime::Mime>>(mime_type: &mime::Mime, provided_mime_types: &'a [M]) -> Option<(&'a mime::Mime, u8)> {
     for provided_ref in provided_mime_types {
-        let provided = provided_ref.as_ref();
+        let provided = provided_ref.borrow();
 
         if mime_type.type_() == provided.type_() {
             if mime_type.subtype() == provided.subtype() {

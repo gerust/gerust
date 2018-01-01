@@ -14,6 +14,12 @@ impl<R: Resource> std::convert::AsRef<mime::Mime> for ProvidedPair<R> {
     }
 }
 
+impl<R: Resource> std::borrow::Borrow<mime::Mime> for ProvidedPair<R> {
+    fn borrow(&self) -> &mime::Mime {
+        &(self.0)
+    }
+}
+
 pub trait Resource where Self: Sized + 'static {
     fn resource_exists(&self) -> bool {
         true
