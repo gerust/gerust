@@ -1,14 +1,16 @@
 extern crate gerust;
 extern crate mime;
-
+extern crate tokio_core;
 extern crate http;
 extern crate hyper;
 extern crate futures;
+extern crate futures_cpupool;
 
-use futures::sync::oneshot;
-use gerust::resource::{Resource, ProvidedPair, Handles};
-use gerust::Body;
-use gerust::flow::Flow;
+use futures::Sink;
+
+use gerust::resource::{Resource, ProvidedPair};
+
+mod helper;
 
 #[derive(Default, Debug)]
 struct DefaultResource;
@@ -24,22 +26,36 @@ impl Resource for DefaultResource {
 }
 
 impl DefaultResource {
-    fn to_html(&mut self, response: &mut gerust::flow::DelayedResponse) -> () {}
+    fn to_html(&mut self, response: &mut gerust::flow::DelayedResponse) -> () {
+        response.response_body().start_send(Ok("Hello, World!".into()));
+    }
 }
 
-
 #[test]
-fn default() {
+fn test_without_accept_header() {
     let resource = DefaultResource::default();
-
-    let mut flow = gerust::flow::HttpFlow::new();
 
     let req = http::request::Builder::new()
         .method(http::method::Method::GET)
         .body("".into())
         .unwrap();
 
-    let (sx, rx): (_, _) = oneshot::channel::<http::Response<Body>>();
+    let response = helper::execute(resource, req);
 
-    flow.execute(resource, req, sx);
+    assert_eq!(response.status(), http::StatusCode::OK);
+}
+
+#[test]
+fn test_with_accept_header() {
+    let resource = DefaultResource::default();
+
+    let req = http::request::Builder::new()
+        .method(http::method::Method::GET)
+        .header("Accept", "text/html")
+        .body("".into())
+        .unwrap();
+
+    let response = helper::execute(resource, req);
+
+    assert_eq!(response.status(), http::StatusCode::OK);
 }
