@@ -165,7 +165,6 @@ pub struct Metadata {
 
 pub struct ResourceWrapper<R>
     where R: Resource {
-    accepted_type: Option<mime::Mime>,
     resource: R,
     pub request: http::Request<Body>,
     response: DelayedResponse,
@@ -179,7 +178,7 @@ impl<R> ResourceWrapper<R>
         let delay = DelayedResponse::new();
         let metadata = Metadata { content_type: None };
 
-        ResourceWrapper { resource: resource, request: request, response: delay, accepted_type: None, metadata: metadata }
+        ResourceWrapper { resource: resource, request: request, response: delay, metadata: metadata }
     }
 }
 
@@ -354,6 +353,9 @@ impl<R> ResourceWrapper<R> where R: Resource {
         let next = if accept.is_some() {
             Self::c4
         } else {
+            // TODO: Proper error handling
+            self.metadata.content_type = Some(self.resource.content_types_provided().first().unwrap().0.clone());
+
             Self::d4
         };
 
@@ -604,12 +606,10 @@ impl<R> ResourceWrapper<R> where R: Resource {
     fn o18(&mut self) -> Outcomes<R> {
         self.response.builder().status(200);
 
-        // TODO incorrect, this must be the deduced accepted content-type
-        let content_type = self.request.headers().get("Content-Type");
+        let content_type = self.metadata.content_type.as_ref();
 
-        if let Some(ct) = content_type {
-            let mime: mime::Mime = ct.to_str().unwrap().parse().unwrap();
-            let pair = self.resource.content_types_provided().iter().find(|&&::resource::ProvidedPair(ref m, _)| *m == mime);
+        if let Some(mime) = content_type {
+            let pair = self.resource.content_types_provided().iter().find(|&&::resource::ProvidedPair(ref m, _)| m == mime);
 
             if let Some(&::resource::ProvidedPair(_, handler)) = pair {
                 Outcomes::OutputHandler(handler)
