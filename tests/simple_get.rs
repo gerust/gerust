@@ -13,11 +13,13 @@ use gerust::resource::{Resource, ProvidedPair};
 mod helper;
 
 #[derive(Default, Debug)]
-struct DefaultResource;
+struct GetResource;
 
-impl Resource for DefaultResource {
-    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) -> ())] {
-        &[]
+impl Resource for GetResource {
+    fn allowed_methods(&self) -> &'static [http::Method] {
+        use http::method::Method;
+
+        &[Method::GET, Method::HEAD]
     }
 
     fn content_types_provided(&self) -> &'static [ProvidedPair<Self>] {
@@ -25,7 +27,7 @@ impl Resource for DefaultResource {
     }
 }
 
-impl DefaultResource {
+impl GetResource {
     fn to_html(&mut self, response: &mut gerust::flow::DelayedResponse) -> () {
         response.response_body().start_send(Ok("Hello, World!".into()));
     }
@@ -33,7 +35,7 @@ impl DefaultResource {
 
 #[test]
 fn test_without_accept_header() {
-    let resource = DefaultResource::default();
+    let resource = GetResource::default();
 
     let req = http::request::Builder::new()
         .method(http::method::Method::GET)
@@ -47,7 +49,7 @@ fn test_without_accept_header() {
 
 #[test]
 fn test_with_accept_header() {
-    let resource = DefaultResource::default();
+    let resource = GetResource::default();
 
     let req = http::request::Builder::new()
         .method(http::method::Method::GET)
@@ -59,3 +61,34 @@ fn test_with_accept_header() {
 
     assert_eq!(response.status(), http::StatusCode::OK);
 }
+
+#[test]
+fn test_head() {
+    let resource = GetResource::default();
+
+    let req = http::request::Builder::new()
+        .method(http::method::Method::HEAD)
+        .header("Content-Type", "text/plain")
+        .body("".into())
+        .unwrap();
+
+    let response = helper::execute(resource, req);
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+}
+
+#[test]
+fn test_not_acceptable_post() {
+    let resource = GetResource::default();
+
+    let req = http::request::Builder::new()
+        .method(http::method::Method::POST)
+        .header("Content-Type", "text/plain")
+        .body("".into())
+        .unwrap();
+
+    let response = helper::execute(resource, req);
+
+    assert_eq!(response.status(), http::StatusCode::METHOD_NOT_ALLOWED);
+}
+

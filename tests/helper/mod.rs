@@ -22,7 +22,7 @@ pub fn execute<R>(resource: R, req: http::Request<Body>) -> http::Response<Body>
         flow.execute(resource, req, sx);
         let res: Result<(),()> = Ok(());
         res
-    }).wait();
+    }).wait().expect("Test harness: Internal error during flow execution");
    
     result_future.wait().expect("Test harness: Internal error in Response handling")
 }
