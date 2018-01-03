@@ -51,6 +51,20 @@ impl DelayedResponse {
             _ => { panic!("called response() before response has started!") }
         }
     }
+
+    pub fn waiting(&self) -> bool {
+        match *self {
+            DelayedResponse::Waiting(_) => true,
+            _ => false
+        }
+    }
+
+    pub fn started(&self) -> bool {
+        match *self {
+            DelayedResponse::Started(_) => true,
+            _ => false
+        }
+    }
 }
 
 pub trait Flow {
@@ -555,32 +569,28 @@ impl<R> ResourceWrapper<R> where R: Resource {
             let pair = self.resource.content_types_accepted().iter().find(|&&(ref m, _)| *m == mime);
 
             if let Some(&(_, handler)) = pair {
-                // TODO remove this very nasty hack
-                //let any = &mut self.request as &mut std::any::Any;
-
-                //let request = any.downcast_mut::<http::Request<Body>>().unwrap();
-
                 handler(&mut self.resource, &mut self.request, &mut self.response);
 
-                if self.resource.process_post(&mut self.response) {
+                // TODO: rewriting response for better support of this protocol
+                if !self.response.started() {
                     self.response.builder()
-                        .status(http::status::StatusCode::CREATED)
+                        .status(http::status::StatusCode::SEE_OTHER)
                         .header(http::header::LOCATION, &*self.resource.create_path());
-
-                    Outcomes::Done
-                } else {
-                    unimplemented!(); //Outcomes::Next(Self::o20)
                 }
+
+                return Outcomes::Done;
             } else {
-                unimplemented!();
+                return Outcomes::Halt(http::status::StatusCode::UNSUPPORTED_MEDIA_TYPE);
             }
         } else {
-            if self.resource.process_post(&mut self.response) {
-                Outcomes::Halt(http::status::StatusCode::CREATED)
-            } else {
-                unimplemented!(); //Outcomes::Next(Self::o20)
-            }
+            self.resource.process_post(&mut self.response);
         }
+
+        // TODO
+        // if self.response.redirect()
+        // Outcomes::Done
+        // } else {
+            Outcomes::Next(Self::p11)
     }
 
     fn n16(&mut self) -> Outcomes<R> {
@@ -619,6 +629,10 @@ impl<R> ResourceWrapper<R> where R: Resource {
         } else {
             unimplemented!();
         }
+    }
+
+    fn p11(&mut self) -> Outcomes<R> {
+        unimplemented!()
     }
 }
 

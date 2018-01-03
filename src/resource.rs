@@ -96,8 +96,7 @@ pub trait Resource where Self: Sized + 'static {
         None
     }
 
-    fn process_post(&self, response: &mut ::flow::DelayedResponse) -> bool {
-        false
+    fn process_post(&self, response: &mut ::flow::DelayedResponse) {
     }
 
     ///TODO: create handler interface
