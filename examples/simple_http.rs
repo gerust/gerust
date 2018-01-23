@@ -4,7 +4,6 @@ extern crate gerust;
 extern crate mime;
 extern crate futures;
 extern crate http;
-extern crate hyper;
 extern crate serde;
 extern crate serde_json;
 #[macro_use]
@@ -43,7 +42,7 @@ impl Resource for OrderResource {
         &[ProvidedPair(mime::TEXT_HTML, OrderResource::to_html)]
     }
 
-    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) -> ())] {
+    fn content_types_accepted(&self) -> &'static [(mime::Mime, fn (&mut Self, request: &mut http::Request<gerust::Body>, response: &mut gerust::flow::DelayedResponse) -> ())] {
         &[(mime::APPLICATION_JSON, OrderResource::from_json)]
     }
 }
@@ -51,15 +50,15 @@ impl Resource for OrderResource {
 impl Handles for OrderResource {
     type Item = Order;
 
-    fn handle(&mut self, item: Self::Item, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) {
+    fn handle(&mut self, item: Self::Item, request: &mut http::Request<gerust::Body>, response: &mut gerust::flow::DelayedResponse) {
         self.order = Some(item);
 
         println!("received order: {:?}", self.order);
     }
 }
 
-pub trait JSON: Handles where <Self as gerust::resource::Handles>::Item: serde::de::DeserializeOwned {
-    fn from_json(&mut self, request: &mut http::Request<hyper::Body>, response: &mut gerust::flow::DelayedResponse) {
+trait JSON: Handles<Item=Order> {
+    fn from_json(&mut self, request: &mut http::Request<gerust::Body>, response: &mut gerust::flow::DelayedResponse) {
         // remove wait() here
         let item = request.body_mut().concat2()
             .then(|body| {
