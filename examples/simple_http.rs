@@ -62,7 +62,7 @@ trait JSON: Handles<Item=Order> {
         // remove wait() here
         let item = request.body_mut().concat2()
             .then(|body| {
-                serde_json::from_slice::<<Self as Handles>::Item>(&body.unwrap())
+                serde_json::from_slice(&body.unwrap())
             }).wait();
 
         self.handle(item.unwrap(), request, response)
