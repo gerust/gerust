@@ -13,6 +13,7 @@ use gerust::resource::{Resource, ProvidedPair, Handles};
 
 use futures::Stream;
 use futures::Future;
+use futures::Sink;
 
 #[derive(Debug, Default)]
 struct OrderResource {
@@ -59,7 +60,7 @@ impl Handles for OrderResource {
 
 trait JSON: Handles<Item=Order> {
     fn from_json(&mut self, request: &mut http::Request<gerust::Body>, response: &mut gerust::flow::DelayedResponse) {
-        // remove wait() here
+        // remove wait() here, the interface should move towards futures
         let item = request.body_mut().concat2()
             .then(|body| {
                 serde_json::from_slice(&body.unwrap())
@@ -73,8 +74,6 @@ impl JSON for OrderResource {}
 
 impl OrderResource {
     fn to_html(&mut self, resp: &mut gerust::flow::DelayedResponse) {
-        use futures::Sink;
-
         resp.response_body().start_send(Ok("Hello, World!".into()));
     }
 }

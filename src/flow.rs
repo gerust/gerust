@@ -7,6 +7,10 @@ use futures;
 use futures::Sink;
 use futures::Future;
 use futures::sync::oneshot::Sender;
+use futures_cpupool;
+use tokio_core;
+use std::sync::Arc;
+
 use ::Body;
 
 use resource::Resource;
@@ -26,7 +30,7 @@ pub enum Outcomes<R> where R: Resource {
     Halt(http::status::StatusCode),
 }
 
-// TODO: Maybe turn into struct,     holding body and builder?
+// TODO: Maybe turn into struct, holding body and builder?
 pub enum DelayedResponse {
     Waiting(http::response::Builder),
     Started(futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>>)
@@ -48,7 +52,7 @@ impl DelayedResponse {
     pub fn response_body(&mut self) -> &mut futures::sync::mpsc::Sender<Result<hyper::Chunk, hyper::Error>> {
         match *self {
             DelayedResponse::Started(ref mut r) => r,
-            _ => { panic!("called response() before response has started!") }
+            _ => { panic!("called response_body() before response has started!") }
         }
     }
 
@@ -73,14 +77,17 @@ pub trait Flow {
     type Future;
     type Error;
 
-    fn new() -> Self;
+    fn new(pool: Arc<futures_cpupool::CpuPool>, handle: tokio_core::reactor::Remote) -> Self;
 
     fn execute<R>(&mut self, resource: R, request: Self::Request, sx: Sender<Self::Response>)
         where R: Resource + Debug;
 }
 
 #[derive(Debug)]
-pub struct HttpFlow;
+pub struct HttpFlow {
+    pool: Arc<futures_cpupool::CpuPool>,
+    handle: tokio_core::reactor::Remote,
+}
 
 pub struct FlowError;
 
@@ -91,8 +98,8 @@ impl Flow for HttpFlow
     type Error = FlowError;
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
-    fn new() -> HttpFlow {
-        HttpFlow
+    fn new(pool: Arc<futures_cpupool::CpuPool>, handle: tokio_core::reactor::Remote) -> HttpFlow {
+        HttpFlow { pool, handle }
     }
 
     fn execute<R>(&mut self, resource: R, request: Self::Request, sx: Sender<Self::Response>)

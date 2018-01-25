@@ -1,6 +1,3 @@
-extern crate futures_cpupool;
-extern crate tokio_core;
-
 use http;
 use futures;
 use hyper;
@@ -15,16 +12,21 @@ use hyper::server::{Http};
 use futures::sync::oneshot;
 use futures::Future;
 
+use futures_cpupool;
+use tokio_core;
+
+use std::sync::Arc;
+
 use std::fmt::Debug;
 
-struct GerustService<'a, R> where R: Resource + Default + Debug {
-    pool: &'a futures_cpupool::CpuPool,
+struct GerustService<R> where R: Resource + Default + Debug + Sync {
+    pool: Arc<futures_cpupool::CpuPool>,
     handle: tokio_core::reactor::Remote,
     resource: PhantomData<R>
 }
 
-impl<'a, R> hyper::server::Service for GerustService<'a, R>
-    where R: Resource + Default + Debug
+impl<R> hyper::server::Service for GerustService<R>
+    where R: Resource + Default + Debug + Sync
 {
     type Request = http::Request<hyper::Body>;
     type Response = http::Response<hyper::Body>;
@@ -34,9 +36,12 @@ impl<'a, R> hyper::server::Service for GerustService<'a, R>
     fn call(&self, req: Self::Request) -> Self::Future {
         let (sx, rx): (futures::sync::oneshot::Sender<Self::Response>, _) = oneshot::channel::<Self::Response>();
 
+        let app_reactor = self.handle.clone();
+        let app_threadpool = self.pool.clone();
+
         let f = futures::future::lazy(move || {
             let resource = R::default();
-            let mut flow = HttpFlow::new();
+            let mut flow = HttpFlow::new(app_threadpool, app_reactor);
 
             flow.execute(resource, req, sx);
             futures::future::ok::<(), ()>(())
@@ -54,17 +59,17 @@ impl<'a, R> hyper::server::Service for GerustService<'a, R>
 }
 
 // TODO: Relax these bounds
-pub fn run_server<R: Resource + Debug + Default>(threads: usize) {
+pub fn run_server<R: Resource + Debug + Default + Sync>(threads: usize) {
     let addr = ([127, 0, 0, 1], 3000).into();
 
     let core = tokio_core::reactor::Core::new().unwrap();
 
-    let pool = futures_cpupool::CpuPool::new(threads);
+    let pool = Arc::new(futures_cpupool::CpuPool::new(threads));
 
     let remote = core.remote();
 
     let service = move || {
-        Ok(GerustService { pool: &pool, handle: remote.clone(), resource: PhantomData::<R> })
+        Ok(GerustService { pool: pool.clone(), handle: remote.clone(), resource: PhantomData::<R> })
     };
 
     let server = Http::new().bind_compat(&addr, service).unwrap();

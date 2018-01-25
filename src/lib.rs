@@ -4,6 +4,7 @@ extern crate log;
 extern crate http;
 extern crate mime;
 extern crate futures;
+extern crate futures_cpupool;
 extern crate tokio_core;
 extern crate hyper;
 extern crate backtrace;
